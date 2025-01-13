@@ -44,7 +44,7 @@ class LaunchDarklyAudit:
             is_on = "`on`" if flag['environments']['production']['on'] else "`off`"
             flag_key = f"{flag['key']}"
             flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag['key']}"
-            maintainer = f"👤 @{flag['_maintainer']['firstName']}"
+            maintainer = f"👤 @{flag.get('_maintainer', {}).get('firstName', 'No maintainer')}"
             created_date = f"Created: {datetime.datetime.fromtimestamp(flag['creationDate'] / 1000.0).strftime('%Y-%m-%d')}"
             last_modified = f"Modified (production): {datetime.datetime.fromtimestamp(flag['environments']['production']['lastModified'] / 1000.0).strftime('%Y-%m-%d')}"
 
