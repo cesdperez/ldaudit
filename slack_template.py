@@ -2,7 +2,7 @@
 slack_message = """
 *:among-use-party: Feature flags cleanup time*
 
-> The value of all these (temporary) feature flags hasn't been modified in production in the last {modified_before_months} months. That smells like an inactive flag!
+> All these (temporary) feature flags haven't been modified in ANY environment (production, staging, dev, etc.) in the last {modified_before_months} months. That smells like an inactive flag!
 
 # Total inactive flags: {total_inactive_flags}
 

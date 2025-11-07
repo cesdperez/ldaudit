@@ -29,8 +29,22 @@ class LaunchDarklyAudit:
     def __filter(self, items, modified_before, is_archived, is_temporary, is_on, maintainers=None):
         items = filter(lambda item: item['archived'] == is_archived, items)
         items = filter(lambda item: item['temporary'] == is_temporary, items)
-        items = filter(lambda item: datetime.datetime.fromtimestamp(
-            item.get('environments', {}).get('production', {}).get('lastModified', 0) / 1000.0) < modified_before, items)
+
+        def is_inactive_in_all_environments(item):
+            environments = item.get('environments', {})
+            if not environments:
+                return False
+
+            for env_name, env_data in environments.items():
+                last_modified = datetime.datetime.fromtimestamp(
+                    env_data.get('lastModified', 0) / 1000.0
+                )
+                if last_modified >= modified_before:
+                    return False
+
+            return True
+
+        items = filter(is_inactive_in_all_environments, items)
         items = filter(lambda item: item.get('environments', {}).get(
             'production', {}).get('on', None) == is_on, items)
         if maintainers:
@@ -84,20 +98,43 @@ class LaunchDarklyAudit:
         """
         output = []
         for flag, locations in flags_with_locations:
-            is_on = "🟢 `on`" if flag['environments']['production']['on'] else "🔴 `off`"
             flag_key = f"{flag['key']}"
             flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag['key']}"
-            maintainer = f"👤 {flag.get('_maintainer', {}).get('firstName', 'No maintainer')}"
-            created_date = f"Created: {datetime.datetime.fromtimestamp(flag['creationDate'] / 1000.0).strftime('%Y-%m-%d')}"
-            last_modified = f"Modified: {datetime.datetime.fromtimestamp(flag['environments']['production']['lastModified'] / 1000.0).strftime('%Y-%m-%d')}"
+            maintainer = flag.get('_maintainer', {}).get('firstName', 'No maintainer')
+            created_date = datetime.datetime.fromtimestamp(flag['creationDate'] / 1000.0).strftime('%Y-%m-%d')
 
-            output.append(
-                f"  ˃ {is_on} [{flag_key}]({flag_url}) · {maintainer} · {created_date} · {last_modified}")
+            env_statuses = []
+            preferred_order = ['production', 'staging', 'dev']
+            environments = flag.get('environments', {})
+
+            ordered_envs = []
+            for env in preferred_order:
+                if env in environments:
+                    ordered_envs.append(env)
+
+            for env in sorted(environments.keys()):
+                if env not in preferred_order:
+                    ordered_envs.append(env)
+
+            for env_name in ordered_envs:
+                env_data = environments[env_name]
+                status = "ON" if env_data.get('on') else "OFF"
+                modified = datetime.datetime.fromtimestamp(
+                    env_data.get('lastModified', 0) / 1000.0
+                ).strftime('%Y-%m-%d')
+                env_statuses.append(f"{env_name.capitalize()}: {status} ({modified})")
+
+            status_line = ", ".join(env_statuses)
+
+            output.append(f"\n{flag_key}")
+            output.append(f"  Status: {status_line}")
+            output.append(f"  Maintainer: {maintainer}")
+            output.append(f"  Created: {created_date}")
+            output.append(f"  URL: {flag_url}")
+            output.append(f"  Locations:")
 
             for file_path, line_num in locations:
-                output.append(f"    📁 {file_path}:{line_num}")
-
-            output.append("")
+                output.append(f"    {file_path}:{line_num}")
 
         return "\n".join(output)
 
@@ -167,9 +204,9 @@ class LaunchDarklyAudit:
             print(f"Error: Directory '{directory}' does not exist or is not accessible.")
             return
 
-        print(f"🔍 Scanning directory: {os.path.abspath(directory)}")
+        print(f"Scanning directory: {os.path.abspath(directory)}")
         if extensions:
-            print(f"📄 File extensions: {extensions}")
+            print(f"File extensions: {extensions}")
         print()
 
         flags = self.__fetch_all_live_flags(project)
@@ -196,7 +233,7 @@ class LaunchDarklyAudit:
         all_inactive_flags = inactive_flags_off + inactive_flags_on
         flag_keys = [flag['key'] for flag in all_inactive_flags]
 
-        print(f"🔎 Searching for {len(flag_keys)} inactive flags in codebase...")
+        print(f"Checking {len(flag_keys)} LaunchDarkly flag(s) inactive in all environments against codebase...")
         search_results = self.__search_directory(directory, flag_keys, extensions)
 
         flags_found = []
@@ -205,16 +242,13 @@ class LaunchDarklyAudit:
                 flags_found.append((flag, search_results[flag['key']]))
 
         if not flags_found:
-            print(f"✅ No inactive flags found in the codebase!")
+            print(f"\nNo inactive flags found in the codebase.")
             return
 
         off_count = sum(1 for f, _ in flags_found if not f['environments']['production']['on'])
         on_count = len(flags_found) - off_count
 
-        print(f"📊 Found {len(flags_found)} inactive flag(s) in codebase ({off_count} off, {on_count} on)")
-        print()
-        print("Inactive flags found in code:")
-        print()
+        print(f"\nFound {len(flags_found)} inactive flag(s) in codebase ({off_count} OFF, {on_count} ON)")
         print(self.__format_scan_results(flags_found, project))
 
 
