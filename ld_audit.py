@@ -9,7 +9,6 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from rich.text import Text
-import sys
 
 load_dotenv()
 
@@ -114,7 +113,7 @@ def search_directory(directory, flag_keys, extensions=None):
                             for flag_key in flag_keys:
                                 if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
                                     results[flag_key].append((file_path, line_num))
-                except:
+                except Exception:
                     continue
 
     return {k: v for k, v in results.items() if v}
@@ -135,7 +134,6 @@ def parse_comma_separated(values: Optional[List[str]]) -> Optional[List[str]]:
 
     result = []
     for value in values:
-        # Split by comma and strip whitespace
         result.extend([v.strip() for v in value.split(',') if v.strip()])
 
     return result if result else None
@@ -162,11 +160,11 @@ def create_flags_table(flags, project, show_all_envs=False):
         table.add_column("Environments", style="magenta")
 
     for flag in flags:
-        status = get_status_icon(flag['environments']['production']['on'])
+        status = get_status_icon(flag.get('environments', {}).get('production', {}).get('on', False))
         flag_key = flag['key']
         maintainer = flag.get('_maintainer', {}).get('firstName', 'None')
         created = format_date(flag['creationDate'])
-        modified = format_date(flag['environments']['production']['lastModified'])
+        modified = format_date(flag.get('environments', {}).get('production', {}).get('lastModified', 0))
 
         flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag_key}"
         flag_link = f"[link={flag_url}]{flag_key}[/link]"
@@ -176,13 +174,8 @@ def create_flags_table(flags, project, show_all_envs=False):
             preferred_order = ['production', 'staging', 'dev']
             environments = flag.get('environments', {})
 
-            ordered_envs = []
-            for env in preferred_order:
-                if env in environments:
-                    ordered_envs.append(env)
-            for env in sorted(environments.keys()):
-                if env not in preferred_order:
-                    ordered_envs.append(env)
+            ordered_envs = [e for e in preferred_order if e in environments] + \
+                          [e for e in sorted(environments.keys()) if e not in preferred_order]
 
             for env_name in ordered_envs:
                 env_data = environments[env_name]
@@ -245,7 +238,6 @@ def inactive(
     flags = fetch_all_live_flags(project)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
 
-    # Parse comma-separated maintainers
     maintainer_list = parse_comma_separated(maintainer)
 
     inactive_flags_off = filter_flags(
@@ -320,7 +312,6 @@ def scan(
         console.print(f"[red]Error:[/red] Directory '{directory}' does not exist", style="bold")
         raise typer.Exit(code=1)
 
-    # Parse comma-separated extensions and maintainers
     ext_list = parse_comma_separated(ext)
     maintainer_list = parse_comma_separated(maintainer)
 
