@@ -38,6 +38,69 @@ class LaunchDarklyAudit:
                 'firstName', None) in maintainers, items)
         return list(items)
 
+    def __search_directory(self, directory, flag_keys, extensions=None):
+        """
+        Search directory recursively for flag keys with exact string matching.
+        Returns dict {flag_key: [(file_path, line_number), ...]}
+        """
+        results = {key: [] for key in flag_keys}
+        exclude_dirs = {'.git', 'node_modules', '__pycache__', '.venv', 'dist', 'build', 'venv', 'env', '.pytest_cache', 'bin', 'obj'}
+
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+
+            for file in files:
+                if extensions:
+                    ext_list = [e.strip().lstrip('.') for e in extensions.split(',')]
+                    if not any(file.endswith(f'.{ext}') for ext in ext_list):
+                        continue
+
+                file_path = os.path.join(root, file)
+
+                if os.path.getsize(file_path) > 1024 * 1024:
+                    continue
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        for line_num, line in enumerate(f, 1):
+                            for flag_key in flag_keys:
+                                if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
+                                    results[flag_key].append((file_path, line_num))
+                except (UnicodeDecodeError, PermissionError, OSError):
+                    try:
+                        with open(file_path, 'r', encoding='latin-1') as f:
+                            for line_num, line in enumerate(f, 1):
+                                for flag_key in flag_keys:
+                                    if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
+                                        results[flag_key].append((file_path, line_num))
+                    except:
+                        continue
+
+        return {k: v for k, v in results.items() if v}
+
+    def __format_scan_results(self, flags_with_locations, project="default"):
+        """
+        Format scan results showing flags with their locations in the codebase.
+        """
+        output = []
+        for flag, locations in flags_with_locations:
+            is_on = "🟢 `on`" if flag['environments']['production']['on'] else "🔴 `off`"
+            flag_key = f"{flag['key']}"
+            flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag['key']}"
+            maintainer = f"👤 {flag.get('_maintainer', {}).get('firstName', 'No maintainer')}"
+            created_date = f"Created: {datetime.datetime.fromtimestamp(flag['creationDate'] / 1000.0).strftime('%Y-%m-%d')}"
+            last_modified = f"Modified: {datetime.datetime.fromtimestamp(flag['environments']['production']['lastModified'] / 1000.0).strftime('%Y-%m-%d')}"
+
+            output.append(
+                f"  ˃ {is_on} [{flag_key}]({flag_url}) · {maintainer} · {created_date} · {last_modified}")
+
+            for file_path, line_num in locations:
+                output.append(f"    📁 {file_path}:{line_num}")
+
+            output.append("")
+
+        return "\n".join(output)
+
     def __pretty_print(self, items, project="default"):
         output = []
         for flag in items:
@@ -94,6 +157,65 @@ class LaunchDarklyAudit:
             inactive_flags_off=self.__pretty_print(inactive_flags_off),
             inactive_flags_on=self.__pretty_print(inactive_flags_on)
         ))
+
+    def scan_repo(self, project="default", directory=".", modified_before_months=3, extensions=None, maintainers=None):
+        """
+        Find inactive feature flags that exist in a codebase directory.
+        Searches recursively for exact string matches of flag keys in files.
+        """
+        if not os.path.isdir(directory):
+            print(f"Error: Directory '{directory}' does not exist or is not accessible.")
+            return
+
+        print(f"🔍 Scanning directory: {os.path.abspath(directory)}")
+        if extensions:
+            print(f"📄 File extensions: {extensions}")
+        print()
+
+        flags = self.__fetch_all_live_flags(project)
+        inactive_flags_off = self.__filter(
+            items=flags['items'],
+            modified_before=datetime.datetime.now(
+            ) - datetime.timedelta(days=modified_before_months*30),
+            is_archived=False,
+            is_temporary=True,
+            is_on=False,
+            maintainers=maintainers,
+        )
+
+        inactive_flags_on = self.__filter(
+            items=flags['items'],
+            modified_before=datetime.datetime.now(
+            ) - datetime.timedelta(days=modified_before_months*30),
+            is_archived=False,
+            is_temporary=True,
+            is_on=True,
+            maintainers=maintainers,
+        )
+
+        all_inactive_flags = inactive_flags_off + inactive_flags_on
+        flag_keys = [flag['key'] for flag in all_inactive_flags]
+
+        print(f"🔎 Searching for {len(flag_keys)} inactive flags in codebase...")
+        search_results = self.__search_directory(directory, flag_keys, extensions)
+
+        flags_found = []
+        for flag in all_inactive_flags:
+            if flag['key'] in search_results:
+                flags_found.append((flag, search_results[flag['key']]))
+
+        if not flags_found:
+            print(f"✅ No inactive flags found in the codebase!")
+            return
+
+        off_count = sum(1 for f, _ in flags_found if not f['environments']['production']['on'])
+        on_count = len(flags_found) - off_count
+
+        print(f"📊 Found {len(flags_found)} inactive flag(s) in codebase ({off_count} off, {on_count} on)")
+        print()
+        print("Inactive flags found in code:")
+        print()
+        print(self.__format_scan_results(flags_found, project))
 
 
 if __name__ == "__main__":
