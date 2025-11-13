@@ -1,5 +1,9 @@
 # Launch Darkly audit CLI
 
+[![Build](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml)
+[![Version](https://img.shields.io/github/v/tag/cesdperez/launchdarkly-audit?label=version)](https://github.com/cesdperez/launchdarkly-audit/tags)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/launchdarkly-audit/pkgs/container/ld-audit)
+
 Python CLI to audit LaunchDarkly feature flags. Modern CLI tool with rich terminal output that identifies inactive temporary flags and finds their references in your codebase.
 
 ## Features
@@ -54,7 +58,12 @@ ldaudit --help
 Use the pre-built Docker image for fast, reproducible builds:
 
 ```bash
-docker pull ghcr.io/yourusername/ld-audit:latest
+# Pull latest version
+docker pull ghcr.io/cesdperez/ld-audit:latest
+
+# Or pull a specific version
+docker pull ghcr.io/cesdperez/ld-audit:0.1.0
+docker pull ghcr.io/cesdperez/ld-audit:0.1
 ```
 
 ## Configuration
@@ -164,7 +173,7 @@ The Docker image is optimized for CI/CD pipelines with minimal size and fast sta
 ```bash
 docker run --rm \
   -e LD_API_KEY=$LD_API_KEY \
-  ghcr.io/yourusername/ld-audit:latest \
+  ghcr.io/cesdperez/ld-audit:latest \
   inactive --project=my-project
 ```
 
@@ -186,7 +195,7 @@ jobs:
         run: |
           docker run --rm \
             -e LD_API_KEY=${{ secrets.LD_API_KEY }} \
-            ghcr.io/yourusername/ld-audit:latest \
+            ghcr.io/cesdperez/ld-audit:latest \
             inactive --project=my-project --months=3
 ```
 
@@ -195,7 +204,7 @@ jobs:
 ```yaml
 audit-flags:
   stage: audit
-  image: ghcr.io/yourusername/ld-audit:latest
+  image: ghcr.io/cesdperez/ld-audit:latest
   script:
     - ldaudit inactive --project=$CI_PROJECT_NAME --months=3
   variables:
@@ -212,7 +221,7 @@ version: 2.1
 jobs:
   audit-flags:
     docker:
-      - image: ghcr.io/yourusername/ld-audit:latest
+      - image: ghcr.io/cesdperez/ld-audit:latest
     steps:
       - run:
           name: Audit feature flags
@@ -256,13 +265,17 @@ uv publish
 
 ### To GitHub Container Registry
 
+Docker images are automatically published via GitHub Actions when you:
+- Push to `main` branch → publishes `latest` tag
+- Create a version tag (e.g., `v0.1.0`) → publishes `latest`, `0.1.0`, and `0.1` tags
+
 ```bash
-# Build and tag
+# Create and push a new version tag
+git tag v0.2.0
+git push origin v0.2.0
+
+# Or manually build and push
 docker build -t ghcr.io/cesdperez/ld-audit:latest .
-
-# Login to GitHub Container Registry
 echo $GITHUB_TOKEN | docker login ghcr.io -u cesdperez --password-stdin
-
-# Push
 docker push ghcr.io/cesdperez/ld-audit:latest
 ```
