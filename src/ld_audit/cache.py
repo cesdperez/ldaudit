@@ -1,7 +1,7 @@
 import json
-import os
 import time
 from pathlib import Path
+
 from platformdirs import user_cache_dir
 
 
@@ -40,16 +40,16 @@ class SimpleCache:
             return None
 
         try:
-            with open(cache_file, 'r') as f:
+            with open(cache_file) as f:
                 cached = json.load(f)
 
-            timestamp = cached.get('timestamp', 0)
+            timestamp = cached.get("timestamp", 0)
             current_time = time.time()
 
             if current_time - timestamp > self.ttl_seconds:
                 return None
 
-            return cached.get('data')
+            return cached.get("data")
         except (json.JSONDecodeError, KeyError, OSError):
             return None
 
@@ -64,12 +64,9 @@ class SimpleCache:
         cache_file = self._get_cache_file(key)
 
         try:
-            cached = {
-                'timestamp': time.time(),
-                'data': data
-            }
+            cached = {"timestamp": time.time(), "data": data}
 
-            with open(cache_file, 'w') as f:
+            with open(cache_file, "w") as f:
                 json.dump(cached, f)
         except OSError:
             pass

@@ -44,7 +44,37 @@ Issues = "https://github.com/cesdperez/launchdarkly-audit/issues"
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0.0",
+    "pre-commit>=4.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ld_audit"]
+
+[tool.black]
+line-length = 120
+target-version = ['py312']
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults (typer pattern)
+    "B904",  # raise from inside except (intentional for exit codes)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"

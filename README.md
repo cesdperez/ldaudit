@@ -1,281 +1,136 @@
-# Launch Darkly audit CLI
+# ldaudit
 
 [![Build](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml)
 [![Version](https://img.shields.io/github/v/tag/cesdperez/launchdarkly-audit?label=version)](https://github.com/cesdperez/launchdarkly-audit/tags)
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/launchdarkly-audit/pkgs/container/ld-audit)
 
-Python CLI to audit LaunchDarkly feature flags. Modern CLI tool with rich terminal output that identifies inactive temporary flags and finds their references in your codebase.
+CLI to audit LaunchDarkly feature flags. Identifies inactive temporary flags and finds their references in your codebase.
 
 ## Features
 
-- **List all flags**: View all feature flags with environment status in a rich formatted table
-- **List inactive flags**: Identify flags that haven't been modified in any environment for X months with color-coded output
-- **Scan codebase**: Find inactive flags that are still referenced in your code with exact file locations
+- **List flags**: View all feature flags with environment status
+- **Find inactive flags**: Identify flags not modified in any environment for X months
+- **Scan codebase**: Find inactive flag references with exact file locations
+- **Rich output**: Color-coded tables, clickable URLs, actionable suggestions
 
-## Installation
+## Quick Start
 
-### For Local Development
+### Docker (Recommended)
 
-1. Install [uv](https://docs.astral.sh/uv/) if you haven't already:
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+docker run --rm -e LD_API_KEY=your-key ghcr.io/cesdperez/ld-audit:latest \
+  inactive --project=my-project --env=production,staging,dev
 ```
 
-2. Clone the repository and install in editable mode:
+### Local Installation
+
 ```bash
-git clone https://github.com/yourusername/launchdarkly-audit.git
+# Install uv package manager
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install
+git clone https://github.com/cesdperez/launchdarkly-audit.git
 cd launchdarkly-audit
 uv sync
-```
 
-3. The CLI is now available via `uv run`:
-```bash
+# Run commands
 uv run ldaudit --help
-```
-
-Or install it as a tool globally:
-```bash
-uv tool install -e .
-ldaudit --help
-```
-
-### For End Users (from PyPI)
-
-Once published, users can install directly:
-```bash
-uv tool install ld-audit
-ldaudit --help
-```
-
-Or with pipx:
-```bash
-pipx install ld-audit
-ldaudit --help
-```
-
-### For CI/CD Pipelines
-
-Use the pre-built Docker image for fast, reproducible builds:
-
-```bash
-# Pull latest version
-docker pull ghcr.io/cesdperez/ld-audit:latest
-
-# Or pull a specific version
-docker pull ghcr.io/cesdperez/ld-audit:0.1.0
-docker pull ghcr.io/cesdperez/ld-audit:0.1
 ```
 
 ## Configuration
 
-Create a `.env` file with your LaunchDarkly API key:
-```
-LD_API_KEY=your-api-key-here
-```
-
-Or export it as an environment variable:
+Required environment variable:
 ```bash
 export LD_API_KEY=your-api-key-here
 ```
 
+Or create a `.env` file:
+```
+LD_API_KEY=your-api-key-here
+```
+
 ## Usage
 
-### Show help
-```bash
-ldaudit --help
-```
+All commands require the `--env` parameter. The `--project` parameter defaults to `"default"` if not specified. Use `ldaudit <command> --help` to see all available options.
 
 ### List all flags
 ```bash
-ldaudit list --project=<project-name>
-ldaudit list -p <project-name>
+ldaudit list --env=production,staging,dev
+ldaudit list --project=my-project --env=production,staging,dev
 ```
 
-### List inactive flags
+### Find inactive flags
 ```bash
-ldaudit inactive --project=<project-name>
-ldaudit inactive -p <project-name> --months=6
+ldaudit inactive --env=prod,stage
+ldaudit inactive --project=my-project --env=prod,stage
+ldaudit inactive -p my-project --env=prod --months=6
+ldaudit inactive -p my-project --env=prod --maintainer=john,jane
 ```
 
-Options:
-- `--project`, `-p`: LaunchDarkly project name
-- `--months`, `-m`: Inactivity threshold in months (default: 3)
-- `--maintainer`: Filter by maintainer (comma-separated or repeatable)
-- `--exclude`: Exclude specific flag keys (comma-separated or repeatable)
-
-Examples:
+### Scan codebase for flag references
 ```bash
-# Find flags inactive for 6+ months
-ldaudit inactive --project=my-project --months=6
-
-# Filter by specific maintainers
-ldaudit inactive -p my-project --maintainer=john,jane
-ldaudit inactive -p my-project --maintainer=john --maintainer=jane
-
-# Exclude known flags
-ldaudit inactive -p my-project --exclude=flag-to-keep,another-flag
+ldaudit scan --env=prod --dir=./src
+ldaudit scan --project=my-project --env=prod --dir=./src
+ldaudit scan -p my-project --env=prod -d ./src --ext=cs,js,ts
+ldaudit scan -p my-project --env=prod --months=6 --max-file-size=10
 ```
 
-### Scan codebase for inactive flags
+### Manage cache
 ```bash
-ldaudit scan --project=<project-name> --dir=/path/to/repo
-ldaudit scan -p <project-name> -d ./src --ext=cs,js,ts
+ldaudit cache list
+ldaudit cache clear
 ```
 
-Options:
-- `--project`, `-p`: LaunchDarkly project name
-- `--dir`, `-d`: Directory to scan (default: current directory)
-- `--ext`: File extensions to scan (comma-separated or repeatable)
-- `--months`, `-m`: Inactivity threshold in months (default: 3)
-- `--maintainer`: Filter by maintainer
+## Command Options
+
+Common flags across all commands:
+- `--project`, `-p`: LaunchDarkly project name (default: `"default"`)
+- `--env`: Comma-separated environment priority **(required)** - e.g., `production,staging,dev`
+- `--base-url`: LaunchDarkly base URL (default: `https://app.launchdarkly.com`)
+- `--cache-ttl`: Cache TTL in seconds (default: 3600)
+- `--no-cache`: Bypass cache for this run
+- `--override-cache`: Force refresh from API
+
+Additional flags for `inactive` and `scan`:
+- `--months`, `-m`: Inactivity threshold (default: 3)
+- `--maintainer`: Filter by maintainer name
 - `--exclude`: Exclude specific flag keys
 
-Examples:
-```bash
-# Scan C# files in a .NET project
-ldaudit scan -p my-project -d /path/to/api --ext=cs
+Additional flags for `scan`:
+- `--dir`, `-d`: Directory to scan (default: current directory)
+- `--ext`: File extensions to scan (comma-separated)
+- `--max-file-size`: Max file size in MB to scan (default: 5)
 
-# Scan multiple file types
-ldaudit scan -p my-project -d ./src --ext=js,ts,jsx,tsx
-ldaudit scan -p my-project -d ./src --ext=js --ext=ts --ext=jsx
-
-# Scan all files in current directory
-ldaudit scan -p my-project -d .
-```
-
-### Cache Control
-
-All commands support cache control flags:
-
-```bash
-# Bypass cache for this run (read from cache, don't write)
-ldaudit list --no-cache
-
-# Force refresh from API and update cache
-ldaudit inactive --override-cache
-```
-
-## Output Features
-
-- Rich tables with rounded borders
-- Color-coded status indicators (🟢 ON / 🔴 OFF)
-- Clickable URLs in supported terminals
-- Multi-environment status display
-- Actionable cleanup suggestions
-- File locations formatted as `path:line_number` for easy IDE navigation
+Use `--help` on any command to see all available options.
 
 ## Docker Usage
 
-The Docker image is optimized for CI/CD pipelines with minimal size and fast startup.
-
-### Basic Usage
-
+### Basic Commands
 ```bash
-docker run --rm \
-  -e LD_API_KEY=$LD_API_KEY \
+# List flags
+docker run --rm -e LD_API_KEY=$LD_API_KEY \
   ghcr.io/cesdperez/ld-audit:latest \
-  inactive --project=my-project
+  list --project=my-project --env=production,staging
+
+# Find inactive flags (6+ months)
+docker run --rm -e LD_API_KEY=$LD_API_KEY \
+  ghcr.io/cesdperez/ld-audit:latest \
+  inactive --project=my-project --env=prod,stage --months=6
 ```
 
-### GitHub Actions Example
+## Advanced Configuration
 
-```yaml
-name: Audit LaunchDarkly Flags
-
-on:
-  schedule:
-    - cron: '0 9 * * 1'  # Weekly on Monday at 9 AM
-  workflow_dispatch:
-
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Audit inactive flags
-        run: |
-          docker run --rm \
-            -e LD_API_KEY=${{ secrets.LD_API_KEY }} \
-            ghcr.io/cesdperez/ld-audit:latest \
-            inactive --project=my-project --months=3
-```
-
-### GitLab CI Example
-
-```yaml
-audit-flags:
-  stage: audit
-  image: ghcr.io/cesdperez/ld-audit:latest
-  script:
-    - ldaudit inactive --project=$CI_PROJECT_NAME --months=3
-  variables:
-    LD_API_KEY: $LD_API_KEY
-  only:
-    - schedules
-```
-
-### CircleCI Example
-
-```yaml
-version: 2.1
-
-jobs:
-  audit-flags:
-    docker:
-      - image: ghcr.io/cesdperez/ld-audit:latest
-    steps:
-      - run:
-          name: Audit feature flags
-          command: ldaudit inactive --project=my-project --months=3
-          environment:
-            LD_API_KEY: ${LD_API_KEY}
-
-workflows:
-  weekly-audit:
-    triggers:
-      - schedule:
-          cron: "0 9 * * 1"
-          filters:
-            branches:
-              only: main
-    jobs:
-      - audit-flags
-```
-
-### Building the Docker Image Locally
-
+### Custom LaunchDarkly Instance
+For on-premises or custom LaunchDarkly installations:
 ```bash
-# Build with uv
-docker build -t ld-audit:local .
-
-# Run locally built image
-docker run --rm -e LD_API_KEY=$LD_API_KEY ld-audit:local inactive -p my-project
+ldaudit list --project=my-project --env=prod \
+  --base-url=https://launchdarkly.mycompany.com
 ```
 
-## Publishing
+## Contributing
 
-### To PyPI
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
-```bash
-# Build the package
-uv build
+## License
 
-# Publish to PyPI (requires PyPI account and token)
-uv publish
-```
-
-### To GitHub Container Registry
-
-Docker images are automatically published via GitHub Actions when you:
-- Push to `main` branch → publishes `latest` tag
-- Create a version tag (e.g., `v0.1.0`) → publishes `latest`, `0.1.0`, and `0.1` tags
-
-```bash
-# Create and push a new version tag
-git tag v0.2.0
-git push origin v0.2.0
-
-# Or manually build and push
-docker build -t ghcr.io/cesdperez/ld-audit:latest .
-echo $GITHUB_TOKEN | docker login ghcr.io -u cesdperez --password-stdin
-docker push ghcr.io/cesdperez/ld-audit:latest
-```
+MIT License - see LICENSE file for details.
