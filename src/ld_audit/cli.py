@@ -9,15 +9,14 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from rich.text import Text
-from cache import SimpleCache
+from ld_audit.cache import SimpleCache
+from ld_audit import VERSION
 
 load_dotenv()
 
-VERSION = "2.0.0"
 app = typer.Typer(help="LaunchDarkly feature flag audit tool")
 console = Console()
 
-# Global API key and cache
 api_key = os.getenv("LD_API_KEY")
 cache = SimpleCache(ttl_seconds=3600)
 
@@ -220,9 +219,9 @@ def list_flags(
     List all active feature flags for a project.
 
     Example:
-        ld-audit list --project=my-project
-        ld-audit list --project=my-project --no-cache
-        ld-audit list --project=my-project --override-cache
+        ldaudit list --project=my-project
+        ldaudit list --project=my-project --no-cache
+        ldaudit list --project=my-project --override-cache
     """
     flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
     items = flags['items']
@@ -257,13 +256,13 @@ def inactive(
     - Haven't been modified in ANY environment for the specified period
 
     Example:
-        ld-audit inactive --project=my-project --months=6
-        ld-audit inactive --maintainer=john,jane
-        ld-audit inactive --maintainer=john --maintainer=jane
-        ld-audit inactive --exclude=known-flag,another-flag
-        ld-audit inactive --exclude=known-flag --exclude=another-flag
-        ld-audit inactive --project=my-project --no-cache
-        ld-audit inactive --project=my-project --override-cache
+        ldaudit inactive --project=my-project --months=6
+        ldaudit inactive --maintainer=john,jane
+        ldaudit inactive --maintainer=john --maintainer=jane
+        ldaudit inactive --exclude=known-flag,another-flag
+        ldaudit inactive --exclude=known-flag --exclude=another-flag
+        ldaudit inactive --project=my-project --no-cache
+        ldaudit inactive --project=my-project --override-cache
     """
     flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
@@ -342,13 +341,13 @@ def scan(
     Searches for inactive flag keys in source files and reports their locations.
 
     Example:
-        ld-audit scan --project=my-project --dir=/path/to/repo
-        ld-audit scan --ext=cs,js,ts --dir=./src
-        ld-audit scan --ext=cs --ext=js --ext=ts --dir=./src
-        ld-audit scan --exclude=known-flag,another-flag
-        ld-audit scan --exclude=known-flag --exclude=another-flag
-        ld-audit scan --project=my-project --no-cache
-        ld-audit scan --project=my-project --override-cache
+        ldaudit scan --project=my-project --dir=/path/to/repo
+        ldaudit scan --ext=cs,js,ts --dir=./src
+        ldaudit scan --ext=cs --ext=js --ext=ts --dir=./src
+        ldaudit scan --exclude=known-flag,another-flag
+        ldaudit scan --exclude=known-flag --exclude=another-flag
+        ldaudit scan --project=my-project --no-cache
+        ldaudit scan --project=my-project --override-cache
     """
     if not os.path.isdir(directory):
         console.print(f"[red]Error:[/red] Directory '{directory}' does not exist", style="bold")
@@ -452,7 +451,7 @@ def main(
     Identify inactive temporary flags and find their references in your codebase.
     """
     if version:
-        console.print(f"ld-audit version {VERSION}")
+        console.print(f"ldaudit version {VERSION}")
         raise typer.Exit()
 
     if ctx.invoked_subcommand is None:
