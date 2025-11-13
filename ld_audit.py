@@ -221,6 +221,7 @@ def inactive(
     project: str = typer.Option("default", "--project", "-p", help="LaunchDarkly project name"),
     months: int = typer.Option(3, "--months", "-m", help="Inactivity threshold in months"),
     maintainer: Optional[List[str]] = typer.Option(None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"),
+    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"),
 ):
     """
     List inactive temporary flags not modified in any environment for X months.
@@ -234,11 +235,14 @@ def inactive(
         ld-audit inactive --project=my-project --months=6
         ld-audit inactive --maintainer=john,jane
         ld-audit inactive --maintainer=john --maintainer=jane
+        ld-audit inactive --exclude=known-flag,another-flag
+        ld-audit inactive --exclude=known-flag --exclude=another-flag
     """
     flags = fetch_all_live_flags(project)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
 
     maintainer_list = parse_comma_separated(maintainer)
+    exclude_list = parse_comma_separated(exclude)
 
     inactive_flags_off = filter_flags(
         items=flags['items'],
@@ -257,6 +261,10 @@ def inactive(
         is_on=True,
         maintainers=maintainer_list,
     )
+
+    if exclude_list:
+        inactive_flags_off = [f for f in inactive_flags_off if f['key'] not in exclude_list]
+        inactive_flags_on = [f for f in inactive_flags_on if f['key'] not in exclude_list]
 
     total = len(inactive_flags_off) + len(inactive_flags_on)
 
@@ -297,6 +305,7 @@ def scan(
     months: int = typer.Option(3, "--months", "-m", help="Inactivity threshold in months"),
     ext: Optional[List[str]] = typer.Option(None, "--ext", help="File extensions to scan (comma-separated or repeated)"),
     maintainer: Optional[List[str]] = typer.Option(None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"),
+    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"),
 ):
     """
     Scan a codebase for references to inactive flags.
@@ -307,6 +316,8 @@ def scan(
         ld-audit scan --project=my-project --dir=/path/to/repo
         ld-audit scan --ext=cs,js,ts --dir=./src
         ld-audit scan --ext=cs --ext=js --ext=ts --dir=./src
+        ld-audit scan --exclude=known-flag,another-flag
+        ld-audit scan --exclude=known-flag --exclude=another-flag
     """
     if not os.path.isdir(directory):
         console.print(f"[red]Error:[/red] Directory '{directory}' does not exist", style="bold")
@@ -314,6 +325,7 @@ def scan(
 
     ext_list = parse_comma_separated(ext)
     maintainer_list = parse_comma_separated(maintainer)
+    exclude_list = parse_comma_separated(exclude)
 
     abs_dir = os.path.abspath(directory)
     console.print(f"\n[bold]Scanning directory:[/bold] [cyan]{abs_dir}[/cyan]")
@@ -323,6 +335,10 @@ def scan(
         console.print(f"[bold]File extensions:[/bold] {extensions_display}")
     else:
         console.print("[dim]Scanning all file types[/dim]")
+
+    if exclude_list:
+        exclusions_display = ", ".join(exclude_list)
+        console.print(f"[bold]Excluding flags:[/bold] {exclusions_display}")
 
     console.print()
 
@@ -348,6 +364,9 @@ def scan(
     )
 
     all_inactive_flags = inactive_flags_off + inactive_flags_on
+
+    if exclude_list:
+        all_inactive_flags = [f for f in all_inactive_flags if f['key'] not in exclude_list]
     flag_keys = [flag['key'] for flag in all_inactive_flags]
 
     console.print(f"[dim]Checking {len(flag_keys)} inactive flag(s) against codebase...[/dim]\n")
