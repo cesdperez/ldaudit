@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from rich.text import Text
+from cache import SimpleCache
 
 load_dotenv()
 
@@ -16,16 +17,29 @@ VERSION = "2.0.0"
 app = typer.Typer(help="LaunchDarkly feature flag audit tool")
 console = Console()
 
-# Global API key
+# Global API key and cache
 api_key = os.getenv("LD_API_KEY")
+cache = SimpleCache(ttl_seconds=3600)
 
 
-def fetch_all_live_flags(project: str):
-    """Fetch all flags from LaunchDarkly API for a given project."""
+def fetch_all_live_flags(project: str, use_cache=True, override_cache=False):
+    """
+    Fetch all flags from LaunchDarkly API for a given project.
+
+    Args:
+        project: LaunchDarkly project name
+        use_cache: Whether to use cached data if available (default: True)
+        override_cache: Force refresh from API and update cache (default: False)
+    """
     if not api_key:
         console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
         console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
         raise typer.Exit(code=1)
+
+    if use_cache and not override_cache:
+        cached_data = cache.get(project)
+        if cached_data is not None:
+            return cached_data
 
     url = f"https://app.launchdarkly.com/api/v2/flags/{project}"
     headers = {
@@ -36,7 +50,12 @@ def fetch_all_live_flags(project: str):
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        if use_cache or override_cache:
+            cache.set(project, data)
+
+        return data
     except requests.exceptions.HTTPError as e:
         console.print(f"[red]Error:[/red] Failed to fetch flags (HTTP {response.status_code})", style="bold")
         if response.status_code == 401:
@@ -194,14 +213,18 @@ def create_flags_table(flags, project, show_all_envs=False):
 @app.command(name="list")
 def list_flags(
     project: str = typer.Option("default", "--project", "-p", help="LaunchDarkly project name"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
+    override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
 ):
     """
     List all active feature flags for a project.
 
     Example:
         ld-audit list --project=my-project
+        ld-audit list --project=my-project --no-cache
+        ld-audit list --project=my-project --override-cache
     """
-    flags = fetch_all_live_flags(project)
+    flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
     items = flags['items']
 
     if not items:
@@ -222,6 +245,8 @@ def inactive(
     months: int = typer.Option(3, "--months", "-m", help="Inactivity threshold in months"),
     maintainer: Optional[List[str]] = typer.Option(None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"),
     exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
+    override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
 ):
     """
     List inactive temporary flags not modified in any environment for X months.
@@ -237,8 +262,10 @@ def inactive(
         ld-audit inactive --maintainer=john --maintainer=jane
         ld-audit inactive --exclude=known-flag,another-flag
         ld-audit inactive --exclude=known-flag --exclude=another-flag
+        ld-audit inactive --project=my-project --no-cache
+        ld-audit inactive --project=my-project --override-cache
     """
-    flags = fetch_all_live_flags(project)
+    flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
 
     maintainer_list = parse_comma_separated(maintainer)
@@ -306,6 +333,8 @@ def scan(
     ext: Optional[List[str]] = typer.Option(None, "--ext", help="File extensions to scan (comma-separated or repeated)"),
     maintainer: Optional[List[str]] = typer.Option(None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"),
     exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
+    override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
 ):
     """
     Scan a codebase for references to inactive flags.
@@ -318,6 +347,8 @@ def scan(
         ld-audit scan --ext=cs --ext=js --ext=ts --dir=./src
         ld-audit scan --exclude=known-flag,another-flag
         ld-audit scan --exclude=known-flag --exclude=another-flag
+        ld-audit scan --project=my-project --no-cache
+        ld-audit scan --project=my-project --override-cache
     """
     if not os.path.isdir(directory):
         console.print(f"[red]Error:[/red] Directory '{directory}' does not exist", style="bold")
@@ -342,7 +373,7 @@ def scan(
 
     console.print()
 
-    flags = fetch_all_live_flags(project)
+    flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
 
     inactive_flags_off = filter_flags(
