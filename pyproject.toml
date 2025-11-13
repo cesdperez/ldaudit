@@ -37,12 +37,14 @@ dependencies = [
 ldaudit = "ld_audit.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/launchdarkly-audit"
-Repository = "https://github.com/yourusername/launchdarkly-audit"
-Issues = "https://github.com/yourusername/launchdarkly-audit/issues"
+Homepage = "https://github.com/cesdperez/launchdarkly-audit"
+Repository = "https://github.com/cesdperez/launchdarkly-audit"
+Issues = "https://github.com/cesdperez/launchdarkly-audit/issues"
 
 [tool.uv]
-dev-dependencies = []
+dev-dependencies = [
+    "pytest>=8.0.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ld_audit"]

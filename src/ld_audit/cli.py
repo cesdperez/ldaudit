@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import os
 import typer
 import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
 from rich.console import Console
 from rich.table import Table
 from rich import box
@@ -20,8 +20,51 @@ console = Console()
 api_key = os.getenv("LD_API_KEY")
 cache = SimpleCache(ttl_seconds=3600)
 
+# Constants
+DEFAULT_ENV = 'production'
+PREFERRED_ENV_ORDER = ['production', 'staging', 'dev']
+MAX_FILE_SIZE_MB = 5
+EXCLUDE_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'dist', 'build', 'venv', 'env', '.pytest_cache', 'bin', 'obj'}
 
-def fetch_all_live_flags(project: str, use_cache=True, override_cache=False):
+
+def get_env_value(flag: Dict[str, Any], env: str = DEFAULT_ENV, key: str = 'on', default: Any = None) -> Any:
+    """
+    Safely get a value from a flag's environment configuration.
+
+    Args:
+        flag: Flag dictionary
+        env: Environment name (default: production)
+        key: Key to retrieve from environment (default: 'on')
+        default: Default value if not found
+
+    Returns:
+        Value from environment or default
+    """
+    return flag.get('environments', {}).get(env, {}).get(key, default)
+
+
+def get_primary_env(flag: Dict[str, Any]) -> str:
+    """
+    Get the primary environment for a flag, falling back if production doesn't exist.
+
+    Args:
+        flag: Flag dictionary
+
+    Returns:
+        Name of the primary environment to use
+    """
+    environments = flag.get('environments', {})
+    if not environments:
+        return DEFAULT_ENV
+
+    for env in PREFERRED_ENV_ORDER:
+        if env in environments:
+            return env
+
+    return list(environments.keys())[0]
+
+
+def fetch_all_live_flags(project: str, use_cache: bool = True, override_cache: bool = False) -> Dict[str, Any]:
     """
     Fetch all flags from LaunchDarkly API for a given project.
 
@@ -29,6 +72,9 @@ def fetch_all_live_flags(project: str, use_cache=True, override_cache=False):
         project: LaunchDarkly project name
         use_cache: Whether to use cached data if available (default: True)
         override_cache: Force refresh from API and update cache (default: False)
+
+    Returns:
+        Dictionary containing flag data from API
     """
     if not api_key:
         console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
@@ -67,46 +113,117 @@ def fetch_all_live_flags(project: str, use_cache=True, override_cache=False):
         raise typer.Exit(code=1)
 
 
-def filter_flags(items, modified_before, is_archived, is_temporary, is_on, maintainers=None):
-    """Filter flags based on criteria."""
-    items = filter(lambda item: item['archived'] == is_archived, items)
-    items = filter(lambda item: item['temporary'] == is_temporary, items)
+def filter_flags(
+    items: List[Dict[str, Any]],
+    modified_before: datetime.datetime,
+    is_archived: bool,
+    is_temporary: bool,
+    is_on: bool,
+    maintainers: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Filter flags based on criteria.
 
-    def is_inactive_in_all_environments(item):
+    Args:
+        items: List of flag dictionaries
+        modified_before: Datetime threshold for last modification
+        is_archived: Filter for archived status
+        is_temporary: Filter for temporary status
+        is_on: Filter for on/off status in primary environment
+        maintainers: Optional list of maintainer first names to filter by
+
+    Returns:
+        Filtered list of flags
+    """
+    result = []
+
+    for item in items:
+        if item['archived'] != is_archived:
+            continue
+        if item['temporary'] != is_temporary:
+            continue
+
         environments = item.get('environments', {})
         if not environments:
-            return False
+            continue
 
-        for env_name, env_data in environments.items():
+        all_envs_inactive = True
+        for env_data in environments.values():
             last_modified = datetime.datetime.fromtimestamp(
                 env_data.get('lastModified', 0) / 1000.0
             )
             if last_modified >= modified_before:
-                return False
+                all_envs_inactive = False
+                break
 
-        return True
+        if not all_envs_inactive:
+            continue
 
-    items = filter(is_inactive_in_all_environments, items)
-    items = filter(lambda item: item.get('environments', {}).get(
-        'production', {}).get('on', None) == is_on, items)
+        primary_env = get_primary_env(item)
+        if get_env_value(item, primary_env, 'on') != is_on:
+            continue
 
-    if maintainers:
-        items = filter(lambda item: item.get('_maintainer', {}).get(
-            'firstName', None) in maintainers, items)
+        if maintainers:
+            maintainer_name = item.get('_maintainer', {}).get('firstName')
+            if maintainer_name not in maintainers:
+                continue
 
-    return list(items)
+        result.append(item)
+
+    return result
 
 
-def search_directory(directory, flag_keys, extensions=None):
+def _search_file_with_encoding(
+    file_path: str,
+    flag_keys: List[str],
+    encoding: str
+) -> Dict[str, List[Tuple[str, int]]]:
     """
-    Search directory recursively for flag keys with exact string matching.
-    Returns dict {flag_key: [(file_path, line_number), ...]}
+    Search a single file for flag keys with a specific encoding.
+
+    Args:
+        file_path: Path to file to search
+        flag_keys: List of flag keys to search for
+        encoding: Character encoding to use
+
+    Returns:
+        Dictionary mapping flag keys to list of (file_path, line_number) tuples
     """
     results = {key: [] for key in flag_keys}
-    exclude_dirs = {'.git', 'node_modules', '__pycache__', '.venv', 'dist', 'build', 'venv', 'env', '.pytest_cache', 'bin', 'obj'}
+
+    try:
+        with open(file_path, 'r', encoding=encoding) as f:
+            for line_num, line in enumerate(f, 1):
+                for flag_key in flag_keys:
+                    if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
+                        results[flag_key].append((file_path, line_num))
+    except Exception:
+        pass
+
+    return {k: v for k, v in results.items() if v}
+
+
+def search_directory(
+    directory: str,
+    flag_keys: List[str],
+    extensions: Optional[List[str]] = None
+) -> Dict[str, List[Tuple[str, int]]]:
+    """
+    Search directory recursively for flag keys with exact string matching.
+
+    Args:
+        directory: Directory path to search
+        flag_keys: List of flag keys to search for
+        extensions: Optional list of file extensions to filter by
+
+    Returns:
+        Dictionary mapping flag keys to list of (file_path, line_number) tuples
+    """
+    results = {key: [] for key in flag_keys}
+    max_file_size = MAX_FILE_SIZE_MB * 1024 * 1024
 
     for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
 
         for file in files:
             if extensions:
@@ -115,30 +232,29 @@ def search_directory(directory, flag_keys, extensions=None):
 
             file_path = os.path.join(root, file)
 
-            if os.path.getsize(file_path) > 1024 * 1024:
+            if os.path.getsize(file_path) > max_file_size:
                 continue
 
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        for flag_key in flag_keys:
-                            if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
-                                results[flag_key].append((file_path, line_num))
-            except (UnicodeDecodeError, PermissionError, OSError):
-                try:
-                    with open(file_path, 'r', encoding='latin-1') as f:
-                        for line_num, line in enumerate(f, 1):
-                            for flag_key in flag_keys:
-                                if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
-                                    results[flag_key].append((file_path, line_num))
-                except Exception:
-                    continue
+            file_results = _search_file_with_encoding(file_path, flag_keys, 'utf-8')
+            if not file_results:
+                file_results = _search_file_with_encoding(file_path, flag_keys, 'latin-1')
+
+            for key, locations in file_results.items():
+                results[key].extend(locations)
 
     return {k: v for k, v in results.items() if v}
 
 
-def format_date(timestamp_ms):
-    """Format timestamp to YYYY-MM-DD."""
+def format_date(timestamp_ms: int) -> str:
+    """
+    Format timestamp to YYYY-MM-DD.
+
+    Args:
+        timestamp_ms: Timestamp in milliseconds
+
+    Returns:
+        Formatted date string
+    """
     return datetime.datetime.fromtimestamp(timestamp_ms / 1000.0).strftime('%Y-%m-%d')
 
 
@@ -146,6 +262,12 @@ def parse_comma_separated(values: Optional[List[str]]) -> Optional[List[str]]:
     """
     Parse comma-separated values from CLI options.
     Supports both --ext=cs,js and --ext=cs --ext=js
+
+    Args:
+        values: List of values that may contain comma-separated items
+
+    Returns:
+        Flattened list of values or None if empty
     """
     if not values:
         return None
@@ -157,16 +279,88 @@ def parse_comma_separated(values: Optional[List[str]]) -> Optional[List[str]]:
     return result if result else None
 
 
-def get_status_icon(is_on):
-    """Get colored status icon."""
+def get_status_icon(is_on: bool) -> Text:
+    """
+    Get colored status icon.
+
+    Args:
+        is_on: Whether flag is on
+
+    Returns:
+        Rich Text object with colored status
+    """
     if is_on:
         return Text("🟢 ON", style="green bold")
     else:
         return Text("🔴 OFF", style="red bold")
 
 
-def create_flags_table(flags, project, show_all_envs=False):
-    """Create a Rich table for displaying flags."""
+def get_inactive_flags(
+    project: str,
+    months: int,
+    maintainers: Optional[List[str]] = None,
+    exclude_list: Optional[List[str]] = None,
+    use_cache: bool = True,
+    override_cache: bool = False
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Fetch and filter inactive flags from LaunchDarkly.
+
+    Args:
+        project: LaunchDarkly project name
+        months: Inactivity threshold in months
+        maintainers: Optional list of maintainer names to filter by
+        exclude_list: Optional list of flag keys to exclude
+        use_cache: Whether to use cache
+        override_cache: Whether to override cache
+
+    Returns:
+        Tuple of (inactive_flags_off, inactive_flags_on)
+    """
+    flags = fetch_all_live_flags(project, use_cache=use_cache, override_cache=override_cache)
+    modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
+
+    inactive_flags_off = filter_flags(
+        items=flags['items'],
+        modified_before=modified_before,
+        is_archived=False,
+        is_temporary=True,
+        is_on=False,
+        maintainers=maintainers,
+    )
+
+    inactive_flags_on = filter_flags(
+        items=flags['items'],
+        modified_before=modified_before,
+        is_archived=False,
+        is_temporary=True,
+        is_on=True,
+        maintainers=maintainers,
+    )
+
+    if exclude_list:
+        inactive_flags_off = [f for f in inactive_flags_off if f['key'] not in exclude_list]
+        inactive_flags_on = [f for f in inactive_flags_on if f['key'] not in exclude_list]
+
+    return inactive_flags_off, inactive_flags_on
+
+
+def create_flags_table(
+    flags: List[Dict[str, Any]],
+    project: str,
+    show_all_envs: bool = False
+) -> Table:
+    """
+    Create a Rich table for displaying flags.
+
+    Args:
+        flags: List of flag dictionaries
+        project: LaunchDarkly project name
+        show_all_envs: Whether to show all environments
+
+    Returns:
+        Rich Table object
+    """
     table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
     table.add_column("Status", style="bold", width=10)
     table.add_column("Flag Key", style="cyan")
@@ -178,22 +372,23 @@ def create_flags_table(flags, project, show_all_envs=False):
         table.add_column("Environments", style="magenta")
 
     for flag in flags:
-        status = get_status_icon(flag.get('environments', {}).get('production', {}).get('on', False))
+        primary_env = get_primary_env(flag)
+        is_on = get_env_value(flag, primary_env, 'on', False)
+        status = get_status_icon(is_on)
         flag_key = flag['key']
         maintainer = flag.get('_maintainer', {}).get('firstName', 'None')
         created = format_date(flag['creationDate'])
-        modified = format_date(flag.get('environments', {}).get('production', {}).get('lastModified', 0))
+        modified = format_date(get_env_value(flag, primary_env, 'lastModified', 0))
 
-        flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag_key}"
+        flag_url = f"https://app.launchdarkly.com/{project}/{primary_env}/features/{flag_key}"
         flag_link = f"[link={flag_url}]{flag_key}[/link]"
 
         if show_all_envs:
             env_statuses = []
-            preferred_order = ['production', 'staging', 'dev']
             environments = flag.get('environments', {})
 
-            ordered_envs = [e for e in preferred_order if e in environments] + \
-                          [e for e in sorted(environments.keys()) if e not in preferred_order]
+            ordered_envs = [e for e in PREFERRED_ENV_ORDER if e in environments] + \
+                          [e for e in sorted(environments.keys()) if e not in PREFERRED_ENV_ORDER]
 
             for env_name in ordered_envs:
                 env_data = environments[env_name]
@@ -264,33 +459,17 @@ def inactive(
         ldaudit inactive --project=my-project --no-cache
         ldaudit inactive --project=my-project --override-cache
     """
-    flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
-    modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
-
     maintainer_list = parse_comma_separated(maintainer)
     exclude_list = parse_comma_separated(exclude)
 
-    inactive_flags_off = filter_flags(
-        items=flags['items'],
-        modified_before=modified_before,
-        is_archived=False,
-        is_temporary=True,
-        is_on=False,
+    inactive_flags_off, inactive_flags_on = get_inactive_flags(
+        project=project,
+        months=months,
         maintainers=maintainer_list,
+        exclude_list=exclude_list,
+        use_cache=not no_cache,
+        override_cache=override_cache
     )
-
-    inactive_flags_on = filter_flags(
-        items=flags['items'],
-        modified_before=modified_before,
-        is_archived=False,
-        is_temporary=True,
-        is_on=True,
-        maintainers=maintainer_list,
-    )
-
-    if exclude_list:
-        inactive_flags_off = [f for f in inactive_flags_off if f['key'] not in exclude_list]
-        inactive_flags_on = [f for f in inactive_flags_on if f['key'] not in exclude_list]
 
     total = len(inactive_flags_off) + len(inactive_flags_on)
 
@@ -372,31 +551,16 @@ def scan(
 
     console.print()
 
-    flags = fetch_all_live_flags(project, use_cache=not no_cache, override_cache=override_cache)
-    modified_before = datetime.datetime.now() - datetime.timedelta(days=months*30)
-
-    inactive_flags_off = filter_flags(
-        items=flags['items'],
-        modified_before=modified_before,
-        is_archived=False,
-        is_temporary=True,
-        is_on=False,
+    inactive_flags_off, inactive_flags_on = get_inactive_flags(
+        project=project,
+        months=months,
         maintainers=maintainer_list,
-    )
-
-    inactive_flags_on = filter_flags(
-        items=flags['items'],
-        modified_before=modified_before,
-        is_archived=False,
-        is_temporary=True,
-        is_on=True,
-        maintainers=maintainer_list,
+        exclude_list=exclude_list,
+        use_cache=not no_cache,
+        override_cache=override_cache
     )
 
     all_inactive_flags = inactive_flags_off + inactive_flags_on
-
-    if exclude_list:
-        all_inactive_flags = [f for f in all_inactive_flags if f['key'] not in exclude_list]
     flag_keys = [flag['key'] for flag in all_inactive_flags]
 
     console.print(f"[dim]Checking {len(flag_keys)} inactive flag(s) against codebase...[/dim]\n")
@@ -413,7 +577,7 @@ def scan(
         console.print("[dim]All inactive flags have been cleaned up.[/dim]")
         raise typer.Exit(code=0)
 
-    off_count = sum(1 for f, _ in flags_found if not f['environments']['production']['on'])
+    off_count = sum(1 for f, _ in flags_found if not get_env_value(f, get_primary_env(f), 'on', False))
     on_count = len(flags_found) - off_count
 
     console.print(f"[bold yellow]Found {len(flags_found)} inactive flag(s) in codebase[/bold yellow]")
@@ -421,11 +585,12 @@ def scan(
 
     for flag, locations in flags_found:
         flag_key = flag['key']
-        flag_url = f"https://app.launchdarkly.com/{project}/production/features/{flag_key}"
+        primary_env = get_primary_env(flag)
+        flag_url = f"https://app.launchdarkly.com/{project}/{primary_env}/features/{flag_key}"
         maintainer = flag.get('_maintainer', {}).get('firstName', 'None')
         created = format_date(flag['creationDate'])
 
-        status = get_status_icon(flag['environments']['production']['on'])
+        status = get_status_icon(get_env_value(flag, primary_env, 'on', False))
 
         console.print(f"[bold cyan]{flag_key}[/bold cyan]", end=" ")
         console.print(status)
@@ -438,6 +603,94 @@ def scan(
             console.print(f"    [yellow]{file_path}[/yellow]:[cyan]{line_num}[/cyan]")
 
         console.print()
+
+
+@app.command(name="cache")
+def cache_cmd(
+    action: str = typer.Argument(..., help="Action to perform: 'clear' or 'list'"),
+):
+    """
+    Manage the local cache.
+
+    Actions:
+      clear - Remove all cached data
+      list  - Show cached projects and their age
+
+    Example:
+        ldaudit cache clear
+        ldaudit cache list
+    """
+    if action == "clear":
+        cache.clear_all()
+        console.print("[green]✓ Cache cleared successfully[/green]")
+    elif action == "list":
+        import json
+        from pathlib import Path
+
+        cache_dir = cache.cache_dir
+        if not cache_dir.exists():
+            console.print("[yellow]No cache directory found[/yellow]")
+            raise typer.Exit(code=0)
+
+        cache_files = list(cache_dir.glob("*.json"))
+        if not cache_files:
+            console.print("[yellow]No cached projects found[/yellow]")
+            raise typer.Exit(code=0)
+
+        table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+        table.add_column("Project", style="cyan")
+        table.add_column("Cached", style="yellow")
+        table.add_column("Age", style="dim")
+        table.add_column("Expires", style="dim")
+
+        import time
+        current_time = time.time()
+
+        for cache_file in sorted(cache_files):
+            try:
+                with open(cache_file, 'r') as f:
+                    cached = json.load(f)
+                    timestamp = cached.get('timestamp', 0)
+                    project_name = cache_file.stem
+
+                    cached_date = datetime.datetime.fromtimestamp(timestamp)
+                    age_seconds = current_time - timestamp
+                    age_minutes = int(age_seconds / 60)
+
+                    if age_minutes < 60:
+                        age_display = f"{age_minutes}m ago"
+                    else:
+                        age_hours = int(age_minutes / 60)
+                        age_display = f"{age_hours}h ago"
+
+                    expires_seconds = cache.ttl_seconds - age_seconds
+                    if expires_seconds > 0:
+                        expires_minutes = int(expires_seconds / 60)
+                        if expires_minutes < 60:
+                            expires_display = f"in {expires_minutes}m"
+                        else:
+                            expires_hours = int(expires_minutes / 60)
+                            expires_display = f"in {expires_hours}h"
+                    else:
+                        expires_display = "[red]expired[/red]"
+
+                    table.add_row(
+                        project_name,
+                        cached_date.strftime('%Y-%m-%d %H:%M'),
+                        age_display,
+                        expires_display
+                    )
+            except Exception:
+                continue
+
+        console.print(f"\n[bold]Cache Location:[/bold] {cache_dir}")
+        console.print(f"[dim]TTL: {cache.ttl_seconds // 60} minutes[/dim]\n")
+        console.print(table)
+        console.print()
+    else:
+        console.print(f"[red]Error:[/red] Unknown action '{action}'", style="bold")
+        console.print("Valid actions: clear, list")
+        raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
