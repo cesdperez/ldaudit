@@ -23,13 +23,14 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
+RUN groupadd -r app && \
+    useradd -r -g app -m -d /home/app app
+
 COPY --from=builder --chown=app:app /app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-RUN groupadd -r app && \
-    useradd -r -g app app && \
-    chown -R app:app /app
+RUN chown -R app:app /app
 
 USER app
 

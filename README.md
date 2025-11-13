@@ -258,11 +258,11 @@ uv publish
 
 ```bash
 # Build and tag
-docker build -t ghcr.io/yourusername/ld-audit:latest .
+docker build -t ghcr.io/cesdperez/ld-audit:latest .
 
 # Login to GitHub Container Registry
-echo $GITHUB_TOKEN | docker login ghcr.io -u yourusername --password-stdin
+echo $GITHUB_TOKEN | docker login ghcr.io -u cesdperez --password-stdin
 
 # Push
-docker push ghcr.io/yourusername/ld-audit:latest
+docker push ghcr.io/cesdperez/ld-audit:latest
 ```
