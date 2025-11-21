@@ -1,17 +1,12 @@
 import datetime
 
 from ld_audit.cli import (
-    DEFAULT_ENV_ORDER,
     filter_flags,
     format_date,
+    format_env_status,
     get_env_value,
-    get_primary_env,
     parse_comma_separated,
 )
-
-# For backward compatibility in tests
-DEFAULT_ENV_LIST = DEFAULT_ENV_ORDER.split(",")
-DEFAULT_ENV = DEFAULT_ENV_LIST[0]
 
 
 class TestGetEnvValue:
@@ -37,33 +32,6 @@ class TestGetEnvValue:
         assert get_env_value(flag, "production", default=False) is False
 
 
-class TestGetPrimaryEnv:
-    def test_get_primary_env_with_production(self):
-        flag = {"environments": {"production": {}, "staging": {}, "dev": {}}}
-        assert get_primary_env(flag, DEFAULT_ENV_LIST) == "production"
-
-    def test_get_primary_env_fallback_to_staging(self):
-        flag = {"environments": {"staging": {}, "dev": {}, "test": {}}}
-        assert get_primary_env(flag, DEFAULT_ENV_LIST) == "staging"
-
-    def test_get_primary_env_fallback_to_dev(self):
-        flag = {"environments": {"dev": {}, "test": {}}}
-        assert get_primary_env(flag, DEFAULT_ENV_LIST) == "dev"
-
-    def test_get_primary_env_custom_env_only(self):
-        flag = {"environments": {"custom-env": {}, "another-env": {}}}
-        result = get_primary_env(flag, DEFAULT_ENV_LIST)
-        assert result in ["another-env", "custom-env"]
-
-    def test_get_primary_env_no_environments(self):
-        flag = {}
-        assert get_primary_env(flag, DEFAULT_ENV_LIST) == DEFAULT_ENV
-
-    def test_get_primary_env_empty_environments(self):
-        flag = {"environments": {}}
-        assert get_primary_env(flag, DEFAULT_ENV_LIST) == DEFAULT_ENV
-
-
 class TestFilterFlags:
     def test_filter_flags_basic(self):
         now = datetime.datetime.now()
@@ -84,8 +52,6 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
         assert len(result) == 1
@@ -110,8 +76,6 @@ class TestFilterFlags:
             modified_before=three_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
         assert len(result) == 0
@@ -139,8 +103,6 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
         assert len(result) == 0
@@ -172,8 +134,6 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
             maintainers=["John"],
         )
 
@@ -199,8 +159,6 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
         assert len(result) == 0
@@ -224,13 +182,12 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
         assert len(result) == 0
 
-    def test_filter_flags_on_status(self):
+    def test_filter_flags_includes_on_flags(self):
+        """Test that ON flags are now included (ON/OFF filtering removed)"""
         now = datetime.datetime.now()
         six_months_ago = now - datetime.timedelta(days=180)
         four_months_ago = now - datetime.timedelta(days=120)
@@ -249,13 +206,13 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
-        assert len(result) == 0
+        # Should include flag regardless of ON/OFF state
+        assert len(result) == 1
 
-    def test_filter_flags_no_production_fallback(self):
+    def test_filter_flags_with_any_environment(self):
+        """Test that flags work regardless of which environments they have"""
         now = datetime.datetime.now()
         six_months_ago = now - datetime.timedelta(days=180)
         four_months_ago = now - datetime.timedelta(days=120)
@@ -274,11 +231,38 @@ class TestFilterFlags:
             modified_before=four_months_ago,
             is_archived=False,
             is_temporary=True,
-            is_on=False,
-            env_order=DEFAULT_ENV_LIST,
         )
 
+        # Should include flag regardless of which environment it's in
         assert len(result) == 1
+
+
+class TestFormatEnvStatus:
+    def test_format_env_status_multiple_envs(self):
+        flag = {
+            "environments": {
+                "production": {"on": False},
+                "staging": {"on": True},
+                "dev": {"on": True},
+            }
+        }
+        result = format_env_status(flag)
+        # Check that it contains all environments (order may vary due to sorting)
+        assert "dev: ON" in result
+        assert "production: OFF" in result
+        assert "staging: ON" in result
+        assert result.startswith("(")
+        assert result.endswith(")")
+
+    def test_format_env_status_single_env(self):
+        flag = {"environments": {"production": {"on": True}}}
+        result = format_env_status(flag)
+        assert "production: ON" in result
+
+    def test_format_env_status_no_environments(self):
+        flag = {}
+        result = format_env_status(flag)
+        assert result == "(no environments)"
 
 
 class TestFormatDate:
