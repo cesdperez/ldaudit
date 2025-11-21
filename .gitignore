@@ -1,3 +1,13 @@
 __pycache__
 .env
 TODO.md
+
+# Testing and coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+*.cover
+*.py,cover
+.hypothesis/
