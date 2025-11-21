@@ -19,7 +19,7 @@ CLI to audit LaunchDarkly feature flags. Identifies inactive temporary flags and
 
 ```bash
 docker run --rm -e LD_API_KEY=your-key ghcr.io/cesdperez/ld-audit:latest \
-  inactive --project=my-project --env=production,staging,dev
+  inactive --project=my-project
 ```
 
 ### Local Installation
@@ -51,28 +51,28 @@ LD_API_KEY=your-api-key-here
 
 ## Usage
 
-All commands require the `--env` parameter. The `--project` parameter defaults to `"default"` if not specified. Use `ldaudit <command> --help` to see all available options.
+The `--project` parameter defaults to `"default"` if not specified. Use `ldaudit <command> --help` to see all available options.
 
 ### List all flags
 ```bash
-ldaudit list --env=production,staging,dev
-ldaudit list --project=my-project --env=production,staging,dev
+ldaudit list
+ldaudit list --project=my-project
 ```
 
 ### Find inactive flags
 ```bash
-ldaudit inactive --env=prod,stage
-ldaudit inactive --project=my-project --env=prod,stage
-ldaudit inactive -p my-project --env=prod --months=6
-ldaudit inactive -p my-project --env=prod --maintainer=john,jane
+ldaudit inactive
+ldaudit inactive --project=my-project
+ldaudit inactive -p my-project --months=6
+ldaudit inactive -p my-project --maintainer=john,jane
 ```
 
 ### Scan codebase for flag references
 ```bash
-ldaudit scan --env=prod --dir=./src
-ldaudit scan --project=my-project --env=prod --dir=./src
-ldaudit scan -p my-project --env=prod -d ./src --ext=cs,js,ts
-ldaudit scan -p my-project --env=prod --months=6 --max-file-size=10
+ldaudit scan --dir=./src
+ldaudit scan --project=my-project --dir=./src
+ldaudit scan -p my-project -d ./src --ext=cs,js,ts
+ldaudit scan -p my-project --months=6 --max-file-size=10
 ```
 
 ### Manage cache
@@ -85,7 +85,6 @@ ldaudit cache clear
 
 Common flags across all commands:
 - `--project`, `-p`: LaunchDarkly project name (default: `"default"`)
-- `--env`: Comma-separated environment priority **(required)** - e.g., `production,staging,dev`
 - `--base-url`: LaunchDarkly base URL (default: `https://app.launchdarkly.com`)
 - `--cache-ttl`: Cache TTL in seconds (default: 3600)
 - `--no-cache`: Bypass cache for this run
@@ -110,12 +109,12 @@ Use `--help` on any command to see all available options.
 # List flags
 docker run --rm -e LD_API_KEY=$LD_API_KEY \
   ghcr.io/cesdperez/ld-audit:latest \
-  list --project=my-project --env=production,staging
+  list --project=my-project
 
 # Find inactive flags (6+ months)
 docker run --rm -e LD_API_KEY=$LD_API_KEY \
   ghcr.io/cesdperez/ld-audit:latest \
-  inactive --project=my-project --env=prod,stage --months=6
+  inactive --project=my-project --months=6
 ```
 
 ## Advanced Configuration
@@ -123,7 +122,7 @@ docker run --rm -e LD_API_KEY=$LD_API_KEY \
 ### Custom LaunchDarkly Instance
 For on-premises or custom LaunchDarkly installations:
 ```bash
-ldaudit list --project=my-project --env=prod \
+ldaudit list --project=my-project \
   --base-url=https://launchdarkly.mycompany.com
 ```
 
