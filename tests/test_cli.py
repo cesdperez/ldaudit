@@ -236,6 +236,125 @@ class TestFilterFlags:
         # Should include flag regardless of which environment it's in
         assert len(result) == 1
 
+    def test_filter_flags_with_exclude_list(self):
+        """Test that exclude_list parameter filters out specified flags"""
+        now = datetime.datetime.now()
+        six_months_ago = now - datetime.timedelta(days=180)
+        four_months_ago = now - datetime.timedelta(days=120)
+
+        flags = [
+            {
+                "key": "flag-1",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+            {
+                "key": "flag-2",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+            {
+                "key": "flag-3",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+        ]
+
+        result = filter_flags(
+            items=flags,
+            modified_before=four_months_ago,
+            is_archived=False,
+            is_temporary=True,
+            exclude_list=["flag-2"],
+        )
+
+        assert len(result) == 2
+        assert result[0]["key"] == "flag-1"
+        assert result[1]["key"] == "flag-3"
+
+    def test_filter_flags_with_multiple_excludes(self):
+        """Test that multiple flags can be excluded"""
+        now = datetime.datetime.now()
+        six_months_ago = now - datetime.timedelta(days=180)
+        four_months_ago = now - datetime.timedelta(days=120)
+
+        flags = [
+            {
+                "key": "keep-flag",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+            {
+                "key": "exclude-1",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+            {
+                "key": "exclude-2",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+            },
+        ]
+
+        result = filter_flags(
+            items=flags,
+            modified_before=four_months_ago,
+            is_archived=False,
+            is_temporary=True,
+            exclude_list=["exclude-1", "exclude-2"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["key"] == "keep-flag"
+
+    def test_filter_flags_exclude_list_with_maintainer(self):
+        """Test that exclude_list and maintainer filters work together"""
+        now = datetime.datetime.now()
+        six_months_ago = now - datetime.timedelta(days=180)
+        four_months_ago = now - datetime.timedelta(days=120)
+
+        flags = [
+            {
+                "key": "john-flag-1",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+                "_maintainer": {"firstName": "John"},
+            },
+            {
+                "key": "john-flag-2",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+                "_maintainer": {"firstName": "John"},
+            },
+            {
+                "key": "jane-flag",
+                "archived": False,
+                "temporary": True,
+                "environments": {"production": {"on": False, "lastModified": int(six_months_ago.timestamp() * 1000)}},
+                "_maintainer": {"firstName": "Jane"},
+            },
+        ]
+
+        result = filter_flags(
+            items=flags,
+            modified_before=four_months_ago,
+            is_archived=False,
+            is_temporary=True,
+            maintainers=["John"],
+            exclude_list=["john-flag-2"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["key"] == "john-flag-1"
+
 
 class TestFormatEnvStatus:
     def test_format_env_status_multiple_envs(self):

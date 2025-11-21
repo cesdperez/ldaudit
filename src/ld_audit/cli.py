@@ -112,6 +112,7 @@ def filter_flags(
     is_archived: bool,
     is_temporary: bool,
     maintainers: list[str] | None = None,
+    exclude_list: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Filter flags based on criteria.
@@ -122,6 +123,7 @@ def filter_flags(
         is_archived: Filter for archived status
         is_temporary: Filter for temporary status
         maintainers: Optional list of maintainer first names to filter by
+        exclude_list: Optional list of flag keys to exclude
 
     Returns:
         Filtered list of flags
@@ -152,6 +154,9 @@ def filter_flags(
             maintainer_name = item.get("_maintainer", {}).get("firstName")
             if maintainer_name not in maintainers:
                 continue
+
+        if exclude_list and item["key"] in exclude_list:
+            continue
 
         result.append(item)
 
@@ -341,10 +346,8 @@ def get_inactive_flags(
         is_archived=False,
         is_temporary=True,
         maintainers=maintainers,
+        exclude_list=exclude_list,
     )
-
-    if exclude_list:
-        inactive_flags = [f for f in inactive_flags if f["key"] not in exclude_list]
 
     return inactive_flags
 
@@ -397,6 +400,12 @@ def list_flags(
     project: str = typer.Option("default", "--project", "-p", help="LaunchDarkly project name"),
     base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url", help="LaunchDarkly base URL"),
     cache_ttl: int = typer.Option(DEFAULT_CACHE_TTL, "--cache-ttl", help="Cache TTL in seconds"),
+    maintainer: list[str] | None = typer.Option(
+        None, "--maintainer", help="Filter by maintainer first name (comma-separated or repeated)"
+    ),
+    exclude: list[str] | None = typer.Option(
+        None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"
+    ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
     override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
 ):
@@ -406,11 +415,19 @@ def list_flags(
     Use --help for all options.
     """
     cache_instance = SimpleCache(ttl_seconds=cache_ttl)
+    maintainer_list = parse_comma_separated(maintainer)
+    exclude_list = parse_comma_separated(exclude)
 
     flags = fetch_all_live_flags(
         project, base_url, cache_instance, use_cache=not no_cache, override_cache=override_cache
     )
     items = flags["items"]
+
+    if maintainer_list:
+        items = [item for item in items if item.get("_maintainer", {}).get("firstName") in maintainer_list]
+
+    if exclude_list:
+        items = [item for item in items if item["key"] not in exclude_list]
 
     if not items:
         console.print(f"[yellow]No flags found in project '{project}'[/yellow]")
