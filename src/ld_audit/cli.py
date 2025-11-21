@@ -651,7 +651,7 @@ def cache_cmd(
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: bool = typer.Option(None, "--version", "-v", help="Show version and exit", is_flag=True),
+    version: bool = typer.Option(None, "--version", "-v", help="Show version and exit"),
 ):
     """
     LaunchDarkly Feature Flag Audit Tool
