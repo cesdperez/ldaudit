@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import datetime
+import json
 import os
+import time
 from typing import Any
 
 import requests
@@ -57,7 +59,7 @@ def get_env_value(flag: dict[str, Any], env: str, key: str = "on", default: Any 
 
 
 def fetch_all_live_flags(
-    project: str, base_url: str, cache: SimpleCache, use_cache: bool = True, override_cache: bool = False
+    project: str, base_url: str, cache: SimpleCache, enable_cache: bool = True, force_refresh: bool = False
 ) -> dict[str, Any]:
     """
     Fetch all flags from LaunchDarkly API for a given project.
@@ -66,8 +68,8 @@ def fetch_all_live_flags(
         project: LaunchDarkly project name
         base_url: LaunchDarkly base URL
         cache: Cache instance
-        use_cache: Whether to use cached data if available (default: True)
-        override_cache: Force refresh from API and update cache (default: False)
+        enable_cache: Whether to use cached data if available (default: True)
+        force_refresh: Force refresh from API and update cache (default: False)
 
     Returns:
         Dictionary containing flag data from API
@@ -77,7 +79,7 @@ def fetch_all_live_flags(
         console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
         raise typer.Exit(code=1)
 
-    if use_cache and not override_cache:
+    if enable_cache and not force_refresh:
         cached_data = cache.get(project)
         if cached_data is not None:
             return cached_data
@@ -90,7 +92,7 @@ def fetch_all_live_flags(
         response.raise_for_status()
         data = response.json()
 
-        if use_cache or override_cache:
+        if enable_cache or force_refresh:
             cache.set(project, data)
 
         return data
@@ -183,7 +185,7 @@ def _search_file_with_encoding(file_path: str, flag_keys: list[str], encoding: s
                 for flag_key in flag_keys:
                     if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
                         results[flag_key].append((file_path, line_num))
-    except Exception:
+    except (UnicodeDecodeError, OSError, PermissionError):
         pass
 
     return {k: v for k, v in results.items() if v}
@@ -224,7 +226,10 @@ def search_directory(
 
             file_path = os.path.join(root, file)
 
-            if os.path.getsize(file_path) > max_file_size:
+            try:
+                if os.path.getsize(file_path) > max_file_size:
+                    continue
+            except OSError:
                 continue
 
             file_results = _search_file_with_encoding(file_path, flag_keys, "utf-8")
@@ -269,6 +274,31 @@ def parse_comma_separated(values: list[str] | None) -> list[str] | None:
         result.extend([v.strip() for v in value.split(",") if v.strip()])
 
     return result if result else None
+
+
+def apply_common_filters(
+    items: list[dict[str, Any]], maintainers: list[str] | None = None, exclude_list: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """
+    Apply common maintainer and exclude filters to a list of flags.
+
+    Args:
+        items: List of flag dictionaries
+        maintainers: Optional list of maintainer first names to filter by
+        exclude_list: Optional list of flag keys to exclude
+
+    Returns:
+        Filtered list of flags
+    """
+    result = items
+
+    if maintainers:
+        result = [item for item in result if item.get("_maintainer", {}).get("firstName") in maintainers]
+
+    if exclude_list:
+        result = [item for item in result if item["key"] not in exclude_list]
+
+    return result
 
 
 def get_status_icon(is_on: bool) -> Text:
@@ -318,8 +348,8 @@ def get_inactive_flags(
     cache: SimpleCache,
     maintainers: list[str] | None = None,
     exclude_list: list[str] | None = None,
-    use_cache: bool = True,
-    override_cache: bool = False,
+    enable_cache: bool = True,
+    force_refresh: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Fetch and filter inactive flags from LaunchDarkly.
@@ -331,13 +361,13 @@ def get_inactive_flags(
         cache: Cache instance
         maintainers: Optional list of maintainer names to filter by
         exclude_list: Optional list of flag keys to exclude
-        use_cache: Whether to use cache
-        override_cache: Whether to override cache
+        enable_cache: Whether to use cache
+        force_refresh: Whether to force refresh cache
 
     Returns:
         List of inactive flags
     """
-    flags = fetch_all_live_flags(project, base_url, cache, use_cache=use_cache, override_cache=override_cache)
+    flags = fetch_all_live_flags(project, base_url, cache, enable_cache=enable_cache, force_refresh=force_refresh)
     modified_before = datetime.datetime.now() - datetime.timedelta(days=months * 30)
 
     inactive_flags = filter_flags(
@@ -419,15 +449,9 @@ def list_flags(
     exclude_list = parse_comma_separated(exclude)
 
     flags = fetch_all_live_flags(
-        project, base_url, cache_instance, use_cache=not no_cache, override_cache=override_cache
+        project, base_url, cache_instance, enable_cache=not no_cache, force_refresh=override_cache
     )
-    items = flags["items"]
-
-    if maintainer_list:
-        items = [item for item in items if item.get("_maintainer", {}).get("firstName") in maintainer_list]
-
-    if exclude_list:
-        items = [item for item in items if item["key"] not in exclude_list]
+    items = apply_common_filters(flags["items"], maintainer_list, exclude_list)
 
     if not items:
         console.print(f"[yellow]No flags found in project '{project}'[/yellow]")
@@ -472,8 +496,8 @@ def inactive(
         cache=cache_instance,
         maintainers=maintainer_list,
         exclude_list=exclude_list,
-        use_cache=not no_cache,
-        override_cache=override_cache,
+        enable_cache=not no_cache,
+        force_refresh=override_cache,
     )
 
     if not inactive_flags:
@@ -544,8 +568,8 @@ def scan(
         cache=cache_instance,
         maintainers=maintainer_list,
         exclude_list=exclude_list,
-        use_cache=not no_cache,
-        override_cache=override_cache,
+        enable_cache=not no_cache,
+        force_refresh=override_cache,
     )
 
     flag_keys = [flag["key"] for flag in inactive_flags]
@@ -601,8 +625,6 @@ def cache_cmd(
         cache_instance.clear_all()
         console.print("[green]✓ Cache cleared successfully[/green]")
     elif action == "list":
-        import json
-
         cache_dir = cache_instance.cache_dir
         if not cache_dir.exists():
             console.print("[yellow]No cache directory found[/yellow]")
@@ -618,8 +640,6 @@ def cache_cmd(
         table.add_column("Cached", style="yellow")
         table.add_column("Age", style="dim")
         table.add_column("Expires", style="dim")
-
-        import time
 
         current_time = time.time()
 
@@ -652,7 +672,7 @@ def cache_cmd(
                         expires_display = "[red]expired[/red]"
 
                     table.add_row(project_name, cached_date.strftime("%Y-%m-%d %H:%M"), age_display, expires_display)
-            except Exception:
+            except (json.JSONDecodeError, OSError, KeyError):
                 continue
 
         console.print(f"\n[bold]Cache Location:[/bold] {cache_dir}")
