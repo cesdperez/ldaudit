@@ -1,9 +1,12 @@
 import os
 import tempfile
 
+import pytest
+
 from ld_audit.cli import _search_file_with_encoding, search_directory
 
 
+@pytest.mark.unit
 class TestSearchFileWithEncoding:
     def test_search_file_single_flag(self):
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".py") as f:
@@ -63,6 +66,7 @@ class TestSearchFileWithEncoding:
             os.unlink(temp_path)
 
 
+@pytest.mark.unit
 class TestSearchDirectory:
     def test_search_directory_basic(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1,14 +1,21 @@
 import datetime
 
+import pytest
+
 from ld_audit.cli import (
+    DEFAULT_BASE_URL,
+    create_flags_table,
     filter_flags,
     format_date,
     format_env_status,
     get_env_value,
+    get_inactive_flags,
+    get_status_icon,
     parse_comma_separated,
 )
 
 
+@pytest.mark.unit
 class TestGetEnvValue:
     def test_get_env_value_with_default_env(self):
         flag = {"environments": {"production": {"on": True, "lastModified": 1234567890000}}}
@@ -32,6 +39,7 @@ class TestGetEnvValue:
         assert get_env_value(flag, "production", default=False) is False
 
 
+@pytest.mark.unit
 class TestFilterFlags:
     def test_filter_flags_basic(self):
         now = datetime.datetime.now()
@@ -356,6 +364,7 @@ class TestFilterFlags:
         assert result[0]["key"] == "john-flag-1"
 
 
+@pytest.mark.unit
 class TestFormatEnvStatus:
     def test_format_env_status_multiple_envs(self):
         flag = {
@@ -384,42 +393,222 @@ class TestFormatEnvStatus:
         assert result == "(no environments)"
 
 
+@pytest.mark.unit
 class TestFormatDate:
-    def test_format_date_valid(self):
-        timestamp = 1704067200000
+    @pytest.mark.parametrize(
+        "timestamp,expected",
+        [
+            (1704067200000, "2024-01-01"),
+            (0, "1970-01-01"),
+            (1609459200000, "2021-01-01"),
+        ],
+    )
+    def test_format_date(self, timestamp, expected):
         result = format_date(timestamp)
-        assert result == "2024-01-01"
-
-    def test_format_date_zero(self):
-        result = format_date(0)
-        assert result == "1970-01-01"
+        assert result == expected
 
 
+@pytest.mark.unit
 class TestParseCommaSeparated:
-    def test_parse_comma_separated_single(self):
-        result = parse_comma_separated(["cs,js,ts"])
-        assert result == ["cs", "js", "ts"]
+    @pytest.mark.parametrize(
+        "input_value,expected",
+        [
+            (["cs,js,ts"], ["cs", "js", "ts"]),
+            (["cs", "js", "ts"], ["cs", "js", "ts"]),
+            (["cs,js", "ts"], ["cs", "js", "ts"]),
+            (["cs, js , ts"], ["cs", "js", "ts"]),
+            (None, None),
+            ([], None),
+            (["", ","], None),
+        ],
+    )
+    def test_parse_comma_separated(self, input_value, expected):
+        result = parse_comma_separated(input_value)
+        assert result == expected
 
-    def test_parse_comma_separated_multiple(self):
-        result = parse_comma_separated(["cs", "js", "ts"])
-        assert result == ["cs", "js", "ts"]
 
-    def test_parse_comma_separated_mixed(self):
-        result = parse_comma_separated(["cs,js", "ts"])
-        assert result == ["cs", "js", "ts"]
+@pytest.mark.unit
+class TestGetStatusIcon:
+    def test_get_status_icon_on(self):
+        """Test status icon for ON state."""
+        result = get_status_icon(True)
+        assert "ON" in result.plain
+        assert result.style == "green bold"
 
-    def test_parse_comma_separated_with_spaces(self):
-        result = parse_comma_separated(["cs, js , ts"])
-        assert result == ["cs", "js", "ts"]
+    def test_get_status_icon_off(self):
+        """Test status icon for OFF state."""
+        result = get_status_icon(False)
+        assert "OFF" in result.plain
+        assert result.style == "red bold"
 
-    def test_parse_comma_separated_none(self):
-        result = parse_comma_separated(None)
-        assert result is None
 
-    def test_parse_comma_separated_empty_list(self):
-        result = parse_comma_separated([])
-        assert result is None
+@pytest.mark.unit
+class TestCreateFlagsTable:
+    def test_create_flags_table_basic(self, sample_flag_data):
+        """Test creating a basic flags table."""
+        flags = [sample_flag_data(key="test-flag")]
 
-    def test_parse_comma_separated_empty_strings(self):
-        result = parse_comma_separated(["", ","])
-        assert result is None
+        table = create_flags_table(flags, "test-project", DEFAULT_BASE_URL)
+
+        assert table is not None
+        assert len(table.columns) == 5
+
+    def test_create_flags_table_multiple_flags(self, sample_flag_data):
+        """Test creating a table with multiple flags."""
+        flags = [
+            sample_flag_data(key="flag-1"),
+            sample_flag_data(key="flag-2"),
+            sample_flag_data(key="flag-3"),
+        ]
+
+        table = create_flags_table(flags, "test-project", DEFAULT_BASE_URL)
+
+        assert table is not None
+        assert len(table.rows) == 3
+
+    def test_create_flags_table_empty(self):
+        """Test creating a table with no flags."""
+        table = create_flags_table([], "test-project", DEFAULT_BASE_URL)
+
+        assert table is not None
+        assert len(table.rows) == 0
+
+    def test_create_flags_table_with_no_maintainer(self, sample_flag_data):
+        """Test creating a table with flag missing maintainer."""
+        flag = sample_flag_data(key="test-flag")
+        del flag["_maintainer"]
+
+        table = create_flags_table([flag], "test-project", DEFAULT_BASE_URL)
+
+        assert table is not None
+        assert len(table.rows) == 1
+
+
+@pytest.mark.integration
+class TestGetInactiveFlags:
+    def test_get_inactive_flags_integration(self, inactive_flag, active_flag, temp_cache_dir, monkeypatch):
+        """Test get_inactive_flags integration with fetch and filter."""
+        from unittest.mock import patch
+
+        from ld_audit.cache import SimpleCache
+
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+        monkeypatch.setattr("ld_audit.cache.user_cache_dir", lambda _: temp_cache_dir)
+
+        import ld_audit.cli as cli_module
+
+        monkeypatch.setattr(cli_module, "api_key", "test-api-key")
+
+        cache = SimpleCache()
+
+        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
+            mock_fetch.return_value = {
+                "items": [inactive_flag, active_flag],
+                "totalCount": 2,
+            }
+
+            result = get_inactive_flags(
+                project="test-project",
+                months=3,
+                base_url=DEFAULT_BASE_URL,
+                cache=cache,
+            )
+
+            assert len(result) == 1
+            assert result[0]["key"] == "inactive-flag"
+
+    def test_get_inactive_flags_with_maintainer_filter(
+        self, inactive_flag, temp_cache_dir, monkeypatch, sample_flag_data
+    ):
+        """Test get_inactive_flags with maintainer filter."""
+        from unittest.mock import patch
+
+        from ld_audit.cache import SimpleCache
+
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+        monkeypatch.setattr("ld_audit.cache.user_cache_dir", lambda _: temp_cache_dir)
+
+        import ld_audit.cli as cli_module
+
+        monkeypatch.setattr(cli_module, "api_key", "test-api-key")
+
+        cache = SimpleCache()
+
+        six_months_ago = int((datetime.datetime.now() - datetime.timedelta(days=180)).timestamp() * 1000)
+        john_flag = sample_flag_data(
+            key="john-inactive",
+            temporary=True,
+            archived=False,
+            maintainer_first_name="John",
+            environments={"production": {"on": True, "lastModified": six_months_ago}},
+        )
+        jane_flag = sample_flag_data(
+            key="jane-inactive",
+            temporary=True,
+            archived=False,
+            maintainer_first_name="Jane",
+            environments={"production": {"on": True, "lastModified": six_months_ago}},
+        )
+
+        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
+            mock_fetch.return_value = {
+                "items": [john_flag, jane_flag],
+                "totalCount": 2,
+            }
+
+            result = get_inactive_flags(
+                project="test-project",
+                months=3,
+                base_url=DEFAULT_BASE_URL,
+                cache=cache,
+                maintainers=["John"],
+            )
+
+            assert len(result) == 1
+            assert result[0]["key"] == "john-inactive"
+
+    def test_get_inactive_flags_with_exclude_list(self, inactive_flag, temp_cache_dir, monkeypatch, sample_flag_data):
+        """Test get_inactive_flags with exclude list."""
+        from unittest.mock import patch
+
+        from ld_audit.cache import SimpleCache
+
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+        monkeypatch.setattr("ld_audit.cache.user_cache_dir", lambda _: temp_cache_dir)
+
+        import ld_audit.cli as cli_module
+
+        monkeypatch.setattr(cli_module, "api_key", "test-api-key")
+
+        cache = SimpleCache()
+
+        six_months_ago = int((datetime.datetime.now() - datetime.timedelta(days=180)).timestamp() * 1000)
+        flag1 = sample_flag_data(
+            key="keep-flag",
+            temporary=True,
+            archived=False,
+            environments={"production": {"on": True, "lastModified": six_months_ago}},
+        )
+        flag2 = sample_flag_data(
+            key="exclude-flag",
+            temporary=True,
+            archived=False,
+            environments={"production": {"on": True, "lastModified": six_months_ago}},
+        )
+
+        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
+            mock_fetch.return_value = {
+                "items": [flag1, flag2],
+                "totalCount": 2,
+            }
+
+            result = get_inactive_flags(
+                project="test-project",
+                months=3,
+                base_url=DEFAULT_BASE_URL,
+                cache=cache,
+                exclude_list=["exclude-flag"],
+            )
+
+            assert len(result) == 1
+            assert result[0]["key"] == "keep-flag"

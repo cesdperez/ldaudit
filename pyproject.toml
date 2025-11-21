@@ -44,6 +44,9 @@ Issues = "https://github.com/cesdperez/launchdarkly-audit/issues"
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "responses>=0.25.0",
     "pre-commit>=4.0.0",
 ]
 
@@ -78,3 +81,19 @@ ignore = [
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
+markers = [
+    "unit: Unit tests for individual functions",
+    "integration: Integration tests for command flows and API interactions",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "**/__pycache__/*"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = "htmlcov"
