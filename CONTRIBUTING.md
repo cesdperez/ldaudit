@@ -14,8 +14,8 @@ Thanks for your interest in contributing to ldaudit! This document provides guid
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/cesdperez/launchdarkly-audit.git
-   cd launchdarkly-audit
+   git clone https://github.com/cesdperez/ldaudit.git
+   cd ldaudit
    ```
 
 2. **Install uv** (if not already installed)
@@ -129,7 +129,7 @@ uv run ruff check --fix src tests
 ## Project Structure
 
 ```
-launchdarkly-audit/
+ldaudit/
 ├── src/ld_audit/          # Main source code
 │   ├── __init__.py        # Package initialization
 │   ├── cli.py             # CLI commands and logic

@@ -1,8 +1,8 @@
 # ldaudit
 
-[![Build](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml)
-[![Version](https://img.shields.io/github/v/tag/cesdperez/launchdarkly-audit?label=version)](https://github.com/cesdperez/launchdarkly-audit/tags)
-[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/launchdarkly-audit/pkgs/container/ldaudit)
+[![Build](https://github.com/cesdperez/ldaudit/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/cesdperez/ldaudit/actions/workflows/docker-publish.yml)
+[![Version](https://img.shields.io/github/v/tag/cesdperez/ldaudit?label=version)](https://github.com/cesdperez/ldaudit/tags)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/ldaudit/pkgs/container/ldaudit)
 
 CLI to audit LaunchDarkly feature flags. Identifies inactive temporary flags and finds their references in your codebase.
 
@@ -29,8 +29,8 @@ docker run --rm -e LD_API_KEY=your-key ghcr.io/cesdperez/ldaudit:latest \
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and install
-git clone https://github.com/cesdperez/launchdarkly-audit.git
-cd launchdarkly-audit
+git clone https://github.com/cesdperez/ldaudit.git
+cd ldaudit
 uv sync
 
 # Run commands
