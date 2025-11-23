@@ -317,19 +317,20 @@ def get_status_icon(is_on: bool) -> Text:
         return Text("🔴 OFF", style="red bold")
 
 
-def format_env_status(flag: dict[str, Any]) -> str:
+def format_env_status(flag: dict[str, Any], include_parentheses: bool = True) -> str:
     """
     Format environment status as inline string with color codes.
 
     Args:
         flag: Flag dictionary
+        include_parentheses: Whether to wrap the result in parentheses (default: True)
 
     Returns:
-        Formatted string like "(prod: OFF, staging: ON, dev: ON)"
+        Formatted string like "(prod: OFF, staging: ON, dev: ON)" or "prod: OFF, staging: ON, dev: ON"
     """
     environments = flag.get("environments", {})
     if not environments:
-        return "(no environments)"
+        return "(no environments)" if include_parentheses else "no environments"
 
     env_parts = []
     for env_name in sorted(environments.keys()):
@@ -338,7 +339,8 @@ def format_env_status(flag: dict[str, Any]) -> str:
         color = "green" if env_data.get("on") else "red"
         env_parts.append(f"[{color}]{env_name}: {status}[/{color}]")
 
-    return f"({', '.join(env_parts)})"
+    result = ", ".join(env_parts)
+    return f"({result})" if include_parentheses else result
 
 
 def get_inactive_flags(
@@ -418,7 +420,7 @@ def create_flags_table(flags: list[dict[str, Any]], project: str, base_url: str)
         flag_url = f"{base_url}/{project}/production/features/{flag_key}"
         flag_link = f"[link={flag_url}]{flag_key}[/link]"
 
-        env_status = format_env_status(flag)
+        env_status = format_env_status(flag, include_parentheses=False)
 
         table.add_row(flag_link, env_status, maintainer, created, modified)
 

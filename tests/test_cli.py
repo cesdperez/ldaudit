@@ -366,7 +366,7 @@ class TestFilterFlags:
 
 @pytest.mark.unit
 class TestFormatEnvStatus:
-    def test_format_env_status_multiple_envs(self):
+    def test_format_env_status_multiple_envs_with_parens(self):
         flag = {
             "environments": {
                 "production": {"on": False},
@@ -375,22 +375,41 @@ class TestFormatEnvStatus:
             }
         }
         result = format_env_status(flag)
-        # Check that it contains all environments (order may vary due to sorting)
         assert "dev: ON" in result
         assert "production: OFF" in result
         assert "staging: ON" in result
         assert result.startswith("(")
         assert result.endswith(")")
 
+    def test_format_env_status_multiple_envs_without_parens(self):
+        flag = {
+            "environments": {
+                "production": {"on": False},
+                "staging": {"on": True},
+                "dev": {"on": True},
+            }
+        }
+        result = format_env_status(flag, include_parentheses=False)
+        assert "dev: ON" in result
+        assert "production: OFF" in result
+        assert "staging: ON" in result
+        assert not result.startswith("(")
+        assert not result.endswith(")")
+
     def test_format_env_status_single_env(self):
         flag = {"environments": {"production": {"on": True}}}
         result = format_env_status(flag)
         assert "production: ON" in result
 
-    def test_format_env_status_no_environments(self):
+    def test_format_env_status_no_environments_with_parens(self):
         flag = {}
         result = format_env_status(flag)
         assert result == "(no environments)"
+
+    def test_format_env_status_no_environments_without_parens(self):
+        flag = {}
+        result = format_env_status(flag, include_parentheses=False)
+        assert result == "no environments"
 
 
 @pytest.mark.unit
