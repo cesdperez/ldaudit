@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from ld_audit.models import Flag
+
 
 @pytest.fixture
 def sample_flag_data():
@@ -169,3 +171,23 @@ def mock_timestamps():
         "six_months_ago": int((now - timedelta(days=180)).timestamp() * 1000),
         "one_year_ago": int((now - timedelta(days=365)).timestamp() * 1000),
     }
+
+
+@pytest.fixture
+def dict_to_flag():
+    """Helper fixture to convert dict flag data to Flag objects."""
+
+    def _convert(flag_dict):
+        return Flag.from_dict(flag_dict)
+
+    return _convert
+
+
+@pytest.fixture
+def dicts_to_flags(dict_to_flag):
+    """Helper fixture to convert list of dict flag data to list of Flag objects."""
+
+    def _convert(flag_dicts):
+        return [dict_to_flag(flag_dict) for flag_dict in flag_dicts]
+
+    return _convert

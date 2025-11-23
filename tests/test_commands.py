@@ -14,12 +14,13 @@ runner = CliRunner()
 
 @pytest.mark.integration
 class TestListCommand:
-    def test_list_command_success(self, mock_api_response, monkeypatch):
+    def test_list_command_success(self, mock_api_response, dicts_to_flags, monkeypatch):
         """Test successful list command execution."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = mock_api_response()
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            api_response = mock_api_response()
+            mock_fetch.return_value = dicts_to_flags(api_response["items"])
 
             result = runner.invoke(app, ["list", "--project", "test-project"])
 
@@ -31,15 +32,15 @@ class TestListCommand:
         """Test list command with no flags found."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = {"items": [], "totalCount": 0}
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = []
 
             result = runner.invoke(app, ["list", "--project", "empty-project"])
 
             assert result.exit_code == 0
             assert "No flags found" in result.stdout
 
-    def test_list_command_with_maintainer_filter(self, sample_flag_data, monkeypatch):
+    def test_list_command_with_maintainer_filter(self, sample_flag_data, dicts_to_flags, monkeypatch):
         """Test list command with maintainer filter."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
@@ -48,15 +49,15 @@ class TestListCommand:
             sample_flag_data(key="jane-flag", maintainer_first_name="Jane"),
         ]
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = {"items": flags, "totalCount": 2}
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
 
             result = runner.invoke(app, ["list", "--project", "test-project", "--maintainer", "John"])
 
             assert result.exit_code == 0
             assert "john-flag" in result.stdout
 
-    def test_list_command_with_exclude(self, sample_flag_data, monkeypatch):
+    def test_list_command_with_exclude(self, sample_flag_data, dicts_to_flags, monkeypatch):
         """Test list command with exclude filter."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
@@ -65,20 +66,21 @@ class TestListCommand:
             sample_flag_data(key="exclude-flag"),
         ]
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = {"items": flags, "totalCount": 2}
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
 
             result = runner.invoke(app, ["list", "--project", "test-project", "--exclude", "exclude-flag"])
 
             assert result.exit_code == 0
             assert "keep-flag" in result.stdout
 
-    def test_list_command_no_cache_flag(self, mock_api_response, monkeypatch):
+    def test_list_command_no_cache_flag(self, mock_api_response, dicts_to_flags, monkeypatch):
         """Test list command with no-cache flag."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = mock_api_response()
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            api_response = mock_api_response()
+            mock_fetch.return_value = dicts_to_flags(api_response["items"])
 
             result = runner.invoke(app, ["list", "--project", "test-project", "--no-cache"])
 
@@ -87,12 +89,13 @@ class TestListCommand:
             call_kwargs = mock_fetch.call_args.kwargs
             assert call_kwargs["enable_cache"] is False
 
-    def test_list_command_override_cache_flag(self, mock_api_response, monkeypatch):
+    def test_list_command_override_cache_flag(self, mock_api_response, dicts_to_flags, monkeypatch):
         """Test list command with override-cache flag."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.fetch_all_live_flags") as mock_fetch:
-            mock_fetch.return_value = mock_api_response()
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            api_response = mock_api_response()
+            mock_fetch.return_value = dicts_to_flags(api_response["items"])
 
             result = runner.invoke(app, ["list", "--project", "test-project", "--override-cache"])
 
@@ -104,77 +107,102 @@ class TestListCommand:
 
 @pytest.mark.integration
 class TestInactiveCommand:
-    def test_inactive_command_with_inactive_flags(self, inactive_flag, monkeypatch):
+    def test_inactive_command_with_inactive_flags(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test inactive command with inactive flags found."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-            mock_get_inactive.return_value = [inactive_flag]
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-            result = runner.invoke(app, ["inactive", "--project", "test-project"])
+            with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-            assert result.exit_code == 0
-            assert "Inactive Feature Flags" in result.stdout
-            assert "inactive-flag" in result.stdout
+                result = runner.invoke(app, ["inactive", "--project", "test-project"])
 
-    def test_inactive_command_with_no_inactive_flags(self, monkeypatch):
+                assert result.exit_code == 0
+                assert "Inactive Feature Flags" in result.stdout
+                assert "inactive-flag" in result.stdout
+
+    def test_inactive_command_with_no_inactive_flags(self, dicts_to_flags, sample_flag_data, monkeypatch):
         """Test inactive command with no inactive flags."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-            mock_get_inactive.return_value = []
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-            result = runner.invoke(app, ["inactive", "--project", "test-project"])
+            with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                mock_get_inactive.return_value = []
 
-            assert result.exit_code == 0
-            assert "No inactive flags found" in result.stdout
+                result = runner.invoke(app, ["inactive", "--project", "test-project"])
 
-    def test_inactive_command_custom_months(self, inactive_flag, monkeypatch):
+                assert result.exit_code == 0
+                assert "No inactive flags found" in result.stdout
+
+    def test_inactive_command_custom_months(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test inactive command with custom months threshold."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-            mock_get_inactive.return_value = [inactive_flag]
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-            result = runner.invoke(app, ["inactive", "--project", "test-project", "--months", "6"])
+            with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-            assert result.exit_code == 0
-            mock_get_inactive.assert_called_once()
-            call_kwargs = mock_get_inactive.call_args.kwargs
-            assert call_kwargs["months"] == 6
+                result = runner.invoke(app, ["inactive", "--project", "test-project", "--months", "6"])
 
-    def test_inactive_command_with_maintainer_filter(self, inactive_flag, monkeypatch):
+                assert result.exit_code == 0
+                mock_get_inactive.assert_called_once()
+                call_args = mock_get_inactive.call_args.args
+                assert call_args[1] == 6
+
+    def test_inactive_command_with_maintainer_filter(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test inactive command with maintainer filter."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-            mock_get_inactive.return_value = [inactive_flag]
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-            result = runner.invoke(app, ["inactive", "--project", "test-project", "--maintainer", "John"])
+            with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-            assert result.exit_code == 0
-            mock_get_inactive.assert_called_once()
-            call_kwargs = mock_get_inactive.call_args.kwargs
-            assert call_kwargs["maintainers"] == ["John"]
+                result = runner.invoke(app, ["inactive", "--project", "test-project", "--maintainer", "John"])
 
-    def test_inactive_command_with_exclude(self, inactive_flag, monkeypatch):
+                assert result.exit_code == 0
+                mock_get_inactive.assert_called_once()
+                call_args = mock_get_inactive.call_args.args
+                assert call_args[2] == ["John"]
+
+    def test_inactive_command_with_exclude(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test inactive command with exclude filter."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
-        with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-            mock_get_inactive.return_value = [inactive_flag]
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-            result = runner.invoke(app, ["inactive", "--project", "test-project", "--exclude", "some-flag"])
+            with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-            assert result.exit_code == 0
-            mock_get_inactive.assert_called_once()
-            call_kwargs = mock_get_inactive.call_args.kwargs
-            assert call_kwargs["exclude_list"] == ["some-flag"]
+                result = runner.invoke(app, ["inactive", "--project", "test-project", "--exclude", "some-flag"])
+
+                assert result.exit_code == 0
+                mock_get_inactive.assert_called_once()
+                call_args = mock_get_inactive.call_args.args
+                assert call_args[3] == ["some-flag"]
 
 
 @pytest.mark.integration
 class TestScanCommand:
-    def test_scan_command_finds_inactive_flags_in_codebase(self, inactive_flag, monkeypatch):
+    def test_scan_command_finds_inactive_flags_in_codebase(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test scan command that finds inactive flags in codebase."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
@@ -184,17 +212,22 @@ class TestScanCommand:
                 f.write('if client.variation("inactive-flag", user, False):\n')
                 f.write('    print("Feature enabled")\n')
 
-            with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-                mock_get_inactive.return_value = [inactive_flag]
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+                mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-                result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir])
+                with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                    mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-                assert result.exit_code == 0
-                assert "Found" in result.stdout
-                assert "inactive flag(s) in codebase" in result.stdout
-                assert "inactive-flag" in result.stdout
+                    result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir])
 
-    def test_scan_command_no_inactive_flags_in_codebase(self, inactive_flag, monkeypatch):
+                    assert result.exit_code == 0
+                    assert "Found" in result.stdout
+                    assert "inactive flag(s) in codebase" in result.stdout
+                    assert "inactive-flag" in result.stdout
+
+    def test_scan_command_no_inactive_flags_in_codebase(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test scan command that finds no inactive flags in codebase."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
@@ -203,13 +236,16 @@ class TestScanCommand:
             with open(test_file, "w") as f:
                 f.write('print("No flags here")\n')
 
-            with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-                mock_get_inactive.return_value = [inactive_flag]
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+                mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-                result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir])
+                with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                    mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-                assert result.exit_code == 0
-                assert "No inactive flags found in codebase" in result.stdout
+                    result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir])
+
+                    assert result.exit_code == 0
+                    assert "No inactive flags found in codebase" in result.stdout
 
     def test_scan_command_invalid_directory(self, monkeypatch):
         """Test scan command with invalid directory."""
@@ -220,7 +256,9 @@ class TestScanCommand:
         assert result.exit_code == 1
         assert "does not exist" in result.stdout
 
-    def test_scan_command_with_extension_filter(self, inactive_flag, monkeypatch):
+    def test_scan_command_with_extension_filter(
+        self, inactive_flag, dict_to_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test scan command with extension filter."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
@@ -234,42 +272,50 @@ class TestScanCommand:
             with open(js_file, "w") as f:
                 f.write('if (client.variation("inactive-flag", user, false)) {\n')
 
-            with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-                mock_get_inactive.return_value = [inactive_flag]
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+                mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-                result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir, "--ext", "py"])
+                with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                    mock_get_inactive.return_value = [dict_to_flag(inactive_flag)]
 
-                assert result.exit_code == 0
-                assert "test.py" in result.stdout or "inactive-flag" in result.stdout
+                    result = runner.invoke(app, ["scan", "--project", "test-project", "--dir", tmpdir, "--ext", "py"])
 
-    def test_scan_command_with_maintainer_and_exclude(self, inactive_flag, monkeypatch):
+                    assert result.exit_code == 0
+                    assert "test.py" in result.stdout or "inactive-flag" in result.stdout
+
+    def test_scan_command_with_maintainer_and_exclude(
+        self, inactive_flag, dicts_to_flags, sample_flag_data, monkeypatch
+    ):
         """Test scan command with maintainer and exclude filters."""
         monkeypatch.setenv("LD_API_KEY", "test-api-key")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("ld_audit.cli.get_inactive_flags") as mock_get_inactive:
-                mock_get_inactive.return_value = []
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+                mock_fetch.return_value = dicts_to_flags([sample_flag_data()])
 
-                result = runner.invoke(
-                    app,
-                    [
-                        "scan",
-                        "--project",
-                        "test-project",
-                        "--dir",
-                        tmpdir,
-                        "--maintainer",
-                        "John",
-                        "--exclude",
-                        "some-flag",
-                    ],
-                )
+                with patch("ld_audit.flag_service.FlagService.get_inactive_flags") as mock_get_inactive:
+                    mock_get_inactive.return_value = []
 
-                assert result.exit_code == 0
-                mock_get_inactive.assert_called_once()
-                call_kwargs = mock_get_inactive.call_args.kwargs
-                assert call_kwargs["maintainers"] == ["John"]
-                assert call_kwargs["exclude_list"] == ["some-flag"]
+                    result = runner.invoke(
+                        app,
+                        [
+                            "scan",
+                            "--project",
+                            "test-project",
+                            "--dir",
+                            tmpdir,
+                            "--maintainer",
+                            "John",
+                            "--exclude",
+                            "some-flag",
+                        ],
+                    )
+
+                    assert result.exit_code == 0
+                    mock_get_inactive.assert_called_once()
+                    call_args = mock_get_inactive.call_args.args
+                    assert call_args[2] == ["John"]
+                    assert call_args[3] == ["some-flag"]
 
 
 @pytest.mark.integration

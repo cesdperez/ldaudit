@@ -1,258 +1,26 @@
 #!/usr/bin/env python3
+"""CLI commands for LaunchDarkly feature flag audit tool."""
+
 import datetime
 import json
 import os
 import time
-from typing import Any
 
-import requests
 import typer
-from dotenv import load_dotenv
 from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich.text import Text
 
 from ld_audit import VERSION
+from ld_audit.api_client import LaunchDarklyAPIError, LaunchDarklyClient
 from ld_audit.cache import SimpleCache
-
-load_dotenv()
+from ld_audit.config import DEFAULT_BASE_URL, DEFAULT_CACHE_TTL, DEFAULT_MAX_FILE_SIZE_MB, get_api_key
+from ld_audit.file_search import CodebaseScanner
+from ld_audit.flag_service import FlagService
+from ld_audit.formatters import create_flags_table, format_date, format_env_status
 
 app = typer.Typer(help="LaunchDarkly feature flag audit tool")
 console = Console()
-
-api_key = os.getenv("LD_API_KEY")
-
-# Default constants
-DEFAULT_BASE_URL = "https://app.launchdarkly.com"
-DEFAULT_CACHE_TTL = 3600
-DEFAULT_MAX_FILE_SIZE_MB = 5
-DEFAULT_EXCLUDE_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "dist",
-    "build",
-    "venv",
-    "env",
-    ".pytest_cache",
-    "bin",
-    "obj",
-}
-
-
-def get_env_value(flag: dict[str, Any], env: str, key: str = "on", default: Any = None) -> Any:
-    """
-    Safely get a value from a flag's environment configuration.
-
-    Args:
-        flag: Flag dictionary
-        env: Environment name
-        key: Key to retrieve from environment (default: 'on')
-        default: Default value if not found
-
-    Returns:
-        Value from environment or default
-    """
-    return flag.get("environments", {}).get(env, {}).get(key, default)
-
-
-def fetch_all_live_flags(
-    project: str, base_url: str, cache: SimpleCache, enable_cache: bool = True, force_refresh: bool = False
-) -> dict[str, Any]:
-    """
-    Fetch all flags from LaunchDarkly API for a given project.
-
-    Args:
-        project: LaunchDarkly project name
-        base_url: LaunchDarkly base URL
-        cache: Cache instance
-        enable_cache: Whether to use cached data if available (default: True)
-        force_refresh: Force refresh from API and update cache (default: False)
-
-    Returns:
-        Dictionary containing flag data from API
-    """
-    if not api_key:
-        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
-        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
-        raise typer.Exit(code=1)
-
-    if enable_cache and not force_refresh:
-        cached_data = cache.get(project)
-        if cached_data is not None:
-            return cached_data
-
-    url = f"{base_url}/api/v2/flags/{project}"
-    headers = {"Authorization": api_key, "Content-Type": "application/json"}
-
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        if enable_cache or force_refresh:
-            cache.set(project, data)
-
-        return data
-    except requests.exceptions.HTTPError:
-        console.print(f"[red]Error:[/red] Failed to fetch flags (HTTP {response.status_code})", style="bold")
-        if response.status_code == 401:
-            console.print("Check your LD_API_KEY - it may be invalid or expired")
-        elif response.status_code == 404:
-            console.print(f"Project '{project}' not found")
-        raise typer.Exit(code=1)
-    except requests.exceptions.RequestException as e:
-        console.print(f"[red]Error:[/red] Network error: {e}", style="bold")
-        raise typer.Exit(code=1)
-
-
-def filter_flags(
-    items: list[dict[str, Any]],
-    modified_before: datetime.datetime,
-    is_archived: bool,
-    is_temporary: bool,
-    maintainers: list[str] | None = None,
-    exclude_list: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Filter flags based on criteria.
-
-    Args:
-        items: List of flag dictionaries
-        modified_before: Datetime threshold for last modification
-        is_archived: Filter for archived status
-        is_temporary: Filter for temporary status
-        maintainers: Optional list of maintainer first names to filter by
-        exclude_list: Optional list of flag keys to exclude
-
-    Returns:
-        Filtered list of flags
-    """
-    result = []
-
-    for item in items:
-        if item["archived"] != is_archived:
-            continue
-        if item["temporary"] != is_temporary:
-            continue
-
-        environments = item.get("environments", {})
-        if not environments:
-            continue
-
-        all_envs_inactive = True
-        for env_data in environments.values():
-            last_modified = datetime.datetime.fromtimestamp(env_data.get("lastModified", 0) / 1000.0)
-            if last_modified >= modified_before:
-                all_envs_inactive = False
-                break
-
-        if not all_envs_inactive:
-            continue
-
-        if maintainers:
-            maintainer_name = item.get("_maintainer", {}).get("firstName")
-            if maintainer_name not in maintainers:
-                continue
-
-        if exclude_list and item["key"] in exclude_list:
-            continue
-
-        result.append(item)
-
-    return result
-
-
-def _search_file_with_encoding(file_path: str, flag_keys: list[str], encoding: str) -> dict[str, list[tuple[str, int]]]:
-    """
-    Search a single file for flag keys with a specific encoding.
-
-    Args:
-        file_path: Path to file to search
-        flag_keys: List of flag keys to search for
-        encoding: Character encoding to use
-
-    Returns:
-        Dictionary mapping flag keys to list of (file_path, line_number) tuples
-    """
-    results = {key: [] for key in flag_keys}
-
-    try:
-        with open(file_path, encoding=encoding) as f:
-            for line_num, line in enumerate(f, 1):
-                for flag_key in flag_keys:
-                    if f'"{flag_key}"' in line or f"'{flag_key}'" in line:
-                        results[flag_key].append((file_path, line_num))
-    except (UnicodeDecodeError, OSError, PermissionError):
-        pass
-
-    return {k: v for k, v in results.items() if v}
-
-
-def search_directory(
-    directory: str,
-    flag_keys: list[str],
-    extensions: list[str] | None = None,
-    max_file_size_mb: int = DEFAULT_MAX_FILE_SIZE_MB,
-    exclude_dirs: set = None,
-) -> dict[str, list[tuple[str, int]]]:
-    """
-    Search directory recursively for flag keys with exact string matching.
-
-    Args:
-        directory: Directory path to search
-        flag_keys: List of flag keys to search for
-        extensions: Optional list of file extensions to filter by
-        max_file_size_mb: Maximum file size in MB to scan
-        exclude_dirs: Set of directory names to exclude
-
-    Returns:
-        Dictionary mapping flag keys to list of (file_path, line_number) tuples
-    """
-    results = {key: [] for key in flag_keys}
-    max_file_size = max_file_size_mb * 1024 * 1024
-    if exclude_dirs is None:
-        exclude_dirs = DEFAULT_EXCLUDE_DIRS
-
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
-
-        for file in files:
-            if extensions:
-                if not any(file.endswith(f".{ext}") for ext in extensions):
-                    continue
-
-            file_path = os.path.join(root, file)
-
-            try:
-                if os.path.getsize(file_path) > max_file_size:
-                    continue
-            except OSError:
-                continue
-
-            file_results = _search_file_with_encoding(file_path, flag_keys, "utf-8")
-            if not file_results:
-                file_results = _search_file_with_encoding(file_path, flag_keys, "latin-1")
-
-            for key, locations in file_results.items():
-                results[key].extend(locations)
-
-    return {k: v for k, v in results.items() if v}
-
-
-def format_date(timestamp_ms: int) -> str:
-    """
-    Format timestamp to YYYY-MM-DD.
-
-    Args:
-        timestamp_ms: Timestamp in milliseconds
-
-    Returns:
-        Formatted date string
-    """
-    return datetime.datetime.fromtimestamp(timestamp_ms / 1000.0).strftime("%Y-%m-%d")
 
 
 def parse_comma_separated(values: list[str] | None) -> list[str] | None:
@@ -276,155 +44,21 @@ def parse_comma_separated(values: list[str] | None) -> list[str] | None:
     return result if result else None
 
 
-def apply_common_filters(
-    items: list[dict[str, Any]], maintainers: list[str] | None = None, exclude_list: list[str] | None = None
-) -> list[dict[str, Any]]:
+def handle_api_error(error: LaunchDarklyAPIError) -> None:
     """
-    Apply common maintainer and exclude filters to a list of flags.
+    Handle API errors with user-friendly messages.
 
     Args:
-        items: List of flag dictionaries
-        maintainers: Optional list of maintainer first names to filter by
-        exclude_list: Optional list of flag keys to exclude
-
-    Returns:
-        Filtered list of flags
+        error: LaunchDarklyAPIError exception
     """
-    result = items
+    console.print(f"[red]Error:[/red] {error.message}", style="bold")
 
-    if maintainers:
-        result = [item for item in result if item.get("_maintainer", {}).get("firstName") in maintainers]
+    if error.status_code == 401:
+        console.print("Check your LD_API_KEY - it may be invalid or expired")
+    elif error.status_code == 404:
+        console.print("Verify the project name is correct")
 
-    if exclude_list:
-        result = [item for item in result if item["key"] not in exclude_list]
-
-    return result
-
-
-def get_status_icon(is_on: bool) -> Text:
-    """
-    Get colored status icon.
-
-    Args:
-        is_on: Whether flag is on
-
-    Returns:
-        Rich Text object with colored status
-    """
-    if is_on:
-        return Text("🟢 ON", style="green bold")
-    else:
-        return Text("🔴 OFF", style="red bold")
-
-
-def format_env_status(flag: dict[str, Any], include_parentheses: bool = True) -> str:
-    """
-    Format environment status as inline string with color codes.
-
-    Args:
-        flag: Flag dictionary
-        include_parentheses: Whether to wrap the result in parentheses (default: True)
-
-    Returns:
-        Formatted string like "(prod: OFF, staging: ON, dev: ON)" or "prod: OFF, staging: ON, dev: ON"
-    """
-    environments = flag.get("environments", {})
-    if not environments:
-        return "(no environments)" if include_parentheses else "no environments"
-
-    env_parts = []
-    for env_name in sorted(environments.keys()):
-        env_data = environments[env_name]
-        status = "ON" if env_data.get("on") else "OFF"
-        color = "green" if env_data.get("on") else "red"
-        env_parts.append(f"[{color}]{env_name}: {status}[/{color}]")
-
-    result = ", ".join(env_parts)
-    return f"({result})" if include_parentheses else result
-
-
-def get_inactive_flags(
-    project: str,
-    months: int,
-    base_url: str,
-    cache: SimpleCache,
-    maintainers: list[str] | None = None,
-    exclude_list: list[str] | None = None,
-    enable_cache: bool = True,
-    force_refresh: bool = False,
-) -> list[dict[str, Any]]:
-    """
-    Fetch and filter inactive flags from LaunchDarkly.
-
-    Args:
-        project: LaunchDarkly project name
-        months: Inactivity threshold in months
-        base_url: LaunchDarkly base URL
-        cache: Cache instance
-        maintainers: Optional list of maintainer names to filter by
-        exclude_list: Optional list of flag keys to exclude
-        enable_cache: Whether to use cache
-        force_refresh: Whether to force refresh cache
-
-    Returns:
-        List of inactive flags
-    """
-    flags = fetch_all_live_flags(project, base_url, cache, enable_cache=enable_cache, force_refresh=force_refresh)
-    modified_before = datetime.datetime.now() - datetime.timedelta(days=months * 30)
-
-    inactive_flags = filter_flags(
-        items=flags["items"],
-        modified_before=modified_before,
-        is_archived=False,
-        is_temporary=True,
-        maintainers=maintainers,
-        exclude_list=exclude_list,
-    )
-
-    return inactive_flags
-
-
-def create_flags_table(flags: list[dict[str, Any]], project: str, base_url: str) -> Table:
-    """
-    Create a Rich table for displaying flags with all environments shown inline.
-
-    Args:
-        flags: List of flag dictionaries
-        project: LaunchDarkly project name
-        base_url: LaunchDarkly base URL
-
-    Returns:
-        Rich Table object
-    """
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
-    table.add_column("Flag Key", style="cyan")
-    table.add_column("Environments", style="magenta")
-    table.add_column("Maintainer", style="yellow")
-    table.add_column("Created", style="dim")
-    table.add_column("Last Modified", style="dim")
-
-    for flag in flags:
-        flag_key = flag["key"]
-        maintainer = flag.get("_maintainer", {}).get("firstName", "None")
-        created = format_date(flag["creationDate"])
-
-        # Get the most recent modification date across all environments
-        environments = flag.get("environments", {})
-        most_recent = 0
-        for env_data in environments.values():
-            last_mod = env_data.get("lastModified", 0)
-            if last_mod > most_recent:
-                most_recent = last_mod
-        modified = format_date(most_recent) if most_recent > 0 else "N/A"
-
-        flag_url = f"{base_url}/{project}/production/features/{flag_key}"
-        flag_link = f"[link={flag_url}]{flag_key}[/link]"
-
-        env_status = format_env_status(flag, include_parentheses=False)
-
-        table.add_row(flag_link, env_status, maintainer, created, modified)
-
-    return table
+    raise typer.Exit(code=1)
 
 
 @app.command(name="list")
@@ -446,23 +80,33 @@ def list_flags(
 
     Use --help for all options.
     """
-    cache_instance = SimpleCache(ttl_seconds=cache_ttl)
+    api_key = get_api_key()
+    if not api_key:
+        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
+        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
+        raise typer.Exit(code=1)
+
+    cache = SimpleCache(ttl_seconds=cache_ttl)
+    client = LaunchDarklyClient(api_key=api_key, base_url=base_url, cache=cache)
+
     maintainer_list = parse_comma_separated(maintainer)
     exclude_list = parse_comma_separated(exclude)
 
-    flags = fetch_all_live_flags(
-        project, base_url, cache_instance, enable_cache=not no_cache, force_refresh=override_cache
-    )
-    items = apply_common_filters(flags["items"], maintainer_list, exclude_list)
+    try:
+        flags = client.get_all_flags(project, enable_cache=not no_cache, force_refresh=override_cache)
+    except LaunchDarklyAPIError as e:
+        handle_api_error(e)
 
-    if not items:
+    filtered_flags = FlagService.apply_common_filters(flags, maintainer_list, exclude_list)
+
+    if not filtered_flags:
         console.print(f"[yellow]No flags found in project '{project}'[/yellow]")
         raise typer.Exit(code=0)
 
     console.print(f"\n[bold]Feature Flags for Project:[/bold] [cyan]{project}[/cyan]")
-    console.print(f"[dim]Total flags: {len(items)}[/dim]\n")
+    console.print(f"[dim]Total flags: {len(filtered_flags)}[/dim]\n")
 
-    table = create_flags_table(items, project, base_url)
+    table = create_flags_table(filtered_flags, project, base_url)
     console.print(table)
     console.print()
 
@@ -487,20 +131,24 @@ def inactive(
 
     Use --help for all options.
     """
-    cache_instance = SimpleCache(ttl_seconds=cache_ttl)
+    api_key = get_api_key()
+    if not api_key:
+        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
+        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
+        raise typer.Exit(code=1)
+
+    cache = SimpleCache(ttl_seconds=cache_ttl)
+    client = LaunchDarklyClient(api_key=api_key, base_url=base_url, cache=cache)
+
     maintainer_list = parse_comma_separated(maintainer)
     exclude_list = parse_comma_separated(exclude)
 
-    inactive_flags = get_inactive_flags(
-        project=project,
-        months=months,
-        base_url=base_url,
-        cache=cache_instance,
-        maintainers=maintainer_list,
-        exclude_list=exclude_list,
-        enable_cache=not no_cache,
-        force_refresh=override_cache,
-    )
+    try:
+        flags = client.get_all_flags(project, enable_cache=not no_cache, force_refresh=override_cache)
+    except LaunchDarklyAPIError as e:
+        handle_api_error(e)
+
+    inactive_flags = FlagService.get_inactive_flags(flags, months, maintainer_list, exclude_list)
 
     if not inactive_flags:
         console.print("[green]✓ No inactive flags found![/green]")
@@ -543,7 +191,15 @@ def scan(
         console.print(f"[red]Error:[/red] Directory '{directory}' does not exist", style="bold")
         raise typer.Exit(code=1)
 
-    cache_instance = SimpleCache(ttl_seconds=cache_ttl)
+    api_key = get_api_key()
+    if not api_key:
+        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
+        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
+        raise typer.Exit(code=1)
+
+    cache = SimpleCache(ttl_seconds=cache_ttl)
+    client = LaunchDarklyClient(api_key=api_key, base_url=base_url, cache=cache)
+
     ext_list = parse_comma_separated(ext)
     maintainer_list = parse_comma_separated(maintainer)
     exclude_list = parse_comma_separated(exclude)
@@ -563,27 +219,20 @@ def scan(
 
     console.print()
 
-    inactive_flags = get_inactive_flags(
-        project=project,
-        months=months,
-        base_url=base_url,
-        cache=cache_instance,
-        maintainers=maintainer_list,
-        exclude_list=exclude_list,
-        enable_cache=not no_cache,
-        force_refresh=override_cache,
-    )
+    try:
+        flags = client.get_all_flags(project, enable_cache=not no_cache, force_refresh=override_cache)
+    except LaunchDarklyAPIError as e:
+        handle_api_error(e)
 
-    flag_keys = [flag["key"] for flag in inactive_flags]
+    inactive_flags = FlagService.get_inactive_flags(flags, months, maintainer_list, exclude_list)
+    flag_keys = [flag.key for flag in inactive_flags]
 
     console.print(f"[dim]Checking {len(flag_keys)} inactive flag(s) against codebase...[/dim]\n")
 
-    search_results = search_directory(directory, flag_keys, ext_list, max_file_size_mb=max_file_size)
+    scanner = CodebaseScanner(max_file_size_mb=max_file_size)
+    search_results = scanner.search_directory(directory, flag_keys, ext_list)
 
-    flags_found = []
-    for flag in inactive_flags:
-        if flag["key"] in search_results:
-            flags_found.append((flag, search_results[flag["key"]]))
+    flags_found = [(flag, search_results[flag.key]) for flag in inactive_flags if flag.key in search_results]
 
     if not flags_found:
         console.print("[green]✓ No inactive flags found in codebase![/green]")
@@ -593,20 +242,18 @@ def scan(
     console.print(f"[bold yellow]Found {len(flags_found)} inactive flag(s) in codebase[/bold yellow]\n")
 
     for flag, locations in flags_found:
-        flag_key = flag["key"]
-        flag_url = f"{base_url}/{project}/production/features/{flag_key}"
-        maintainer = flag.get("_maintainer", {}).get("firstName", "None")
-        created = format_date(flag["creationDate"])
+        flag_url = f"{base_url}/{project}/production/features/{flag.key}"
+        created = format_date(int(flag.creation_date.timestamp() * 1000))
         env_status = format_env_status(flag)
 
-        console.print(f"[bold cyan]{flag_key}[/bold cyan] {env_status}")
-        console.print(f"  [dim]Maintainer:[/dim] {maintainer}")
+        console.print(f"[bold cyan]{flag.key}[/bold cyan] {env_status}")
+        console.print(f"  [dim]Maintainer:[/dim] {flag.maintainer.first_name}")
         console.print(f"  [dim]Created:[/dim] {created}")
         console.print(f"  [dim]URL:[/dim] [link={flag_url}]{flag_url}[/link]")
         console.print("  [bold]Locations:[/bold]")
 
-        for file_path, line_num in locations:
-            console.print(f"    [yellow]{file_path}[/yellow]:[cyan]{line_num}[/cyan]")
+        for location in locations:
+            console.print(f"    [yellow]{location.file_path}[/yellow]:[cyan]{location.line_number}[/cyan]")
 
         console.print()
 
@@ -626,65 +273,89 @@ def cache_cmd(
     if action == "clear":
         cache_instance.clear_all()
         console.print("[green]✓ Cache cleared successfully[/green]")
-    elif action == "list":
-        cache_dir = cache_instance.cache_dir
-        if not cache_dir.exists():
-            console.print("[yellow]No cache directory found[/yellow]")
-            raise typer.Exit(code=0)
+        return
 
-        cache_files = list(cache_dir.glob("*.json"))
-        if not cache_files:
-            console.print("[yellow]No cached projects found[/yellow]")
-            raise typer.Exit(code=0)
+    if action == "list":
+        _display_cache_list(cache_instance)
+        return
 
-        table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
-        table.add_column("Project", style="cyan")
-        table.add_column("Cached", style="yellow")
-        table.add_column("Age", style="dim")
-        table.add_column("Expires", style="dim")
+    console.print(f"[red]Error:[/red] Unknown action '{action}'", style="bold")
+    console.print("Valid actions: clear, list")
+    raise typer.Exit(code=1)
 
-        current_time = time.time()
 
-        for cache_file in sorted(cache_files):
-            try:
-                with open(cache_file) as f:
-                    cached = json.load(f)
-                    timestamp = cached.get("timestamp", 0)
-                    project_name = cache_file.stem
+def _display_cache_list(cache_instance: SimpleCache) -> None:
+    """Display list of cached projects."""
+    cache_dir = cache_instance.cache_dir
+    if not cache_dir.exists():
+        console.print("[yellow]No cache directory found[/yellow]")
+        raise typer.Exit(code=0)
 
-                    cached_date = datetime.datetime.fromtimestamp(timestamp)
-                    age_seconds = current_time - timestamp
-                    age_minutes = int(age_seconds / 60)
+    cache_files = list(cache_dir.glob("*.json"))
+    if not cache_files:
+        console.print("[yellow]No cached projects found[/yellow]")
+        raise typer.Exit(code=0)
 
-                    if age_minutes < 60:
-                        age_display = f"{age_minutes}m ago"
-                    else:
-                        age_hours = int(age_minutes / 60)
-                        age_display = f"{age_hours}h ago"
+    table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+    table.add_column("Project", style="cyan")
+    table.add_column("Cached", style="yellow")
+    table.add_column("Age", style="dim")
+    table.add_column("Expires", style="dim")
 
-                    expires_seconds = cache_instance.ttl_seconds - age_seconds
-                    if expires_seconds > 0:
-                        expires_minutes = int(expires_seconds / 60)
-                        if expires_minutes < 60:
-                            expires_display = f"in {expires_minutes}m"
-                        else:
-                            expires_hours = int(expires_minutes / 60)
-                            expires_display = f"in {expires_hours}h"
-                    else:
-                        expires_display = "[red]expired[/red]"
+    current_time = time.time()
 
-                    table.add_row(project_name, cached_date.strftime("%Y-%m-%d %H:%M"), age_display, expires_display)
-            except (json.JSONDecodeError, OSError, KeyError):
-                continue
+    for cache_file in sorted(cache_files):
+        row_data = _get_cache_row_data(cache_file, current_time, cache_instance.ttl_seconds)
+        if row_data:
+            table.add_row(*row_data)
 
-        console.print(f"\n[bold]Cache Location:[/bold] {cache_dir}")
-        console.print(f"[dim]TTL: {cache_instance.ttl_seconds // 60} minutes[/dim]\n")
-        console.print(table)
-        console.print()
+    console.print(f"\n[bold]Cache Location:[/bold] {cache_dir}")
+    console.print(f"[dim]TTL: {cache_instance.ttl_seconds // 60} minutes[/dim]\n")
+    console.print(table)
+    console.print()
+
+
+def _get_cache_row_data(cache_file, current_time: float, ttl_seconds: int) -> tuple[str, str, str, str] | None:
+    """Get formatted cache row data or None if file can't be read."""
+    try:
+        with open(cache_file) as f:
+            cached = json.load(f)
+            timestamp = cached.get("timestamp", 0)
+            project_name = cache_file.stem
+
+            cached_date = datetime.datetime.fromtimestamp(timestamp)
+            age_seconds = current_time - timestamp
+            age_display = _format_time_duration(age_seconds)
+
+            expires_seconds = ttl_seconds - age_seconds
+            expires_display = _format_expiry(expires_seconds)
+
+            return (project_name, cached_date.strftime("%Y-%m-%d %H:%M"), age_display, expires_display)
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
+
+
+def _format_time_duration(seconds: float) -> str:
+    """Format time duration in human-readable format."""
+    minutes = int(seconds / 60)
+    if minutes < 60:
+        return f"{minutes}m ago"
     else:
-        console.print(f"[red]Error:[/red] Unknown action '{action}'", style="bold")
-        console.print("Valid actions: clear, list")
-        raise typer.Exit(code=1)
+        hours = int(minutes / 60)
+        return f"{hours}h ago"
+
+
+def _format_expiry(expires_seconds: float) -> str:
+    """Format expiry time in human-readable format."""
+    if expires_seconds <= 0:
+        return "[red]expired[/red]"
+
+    expires_minutes = int(expires_seconds / 60)
+    if expires_minutes < 60:
+        return f"in {expires_minutes}m"
+    else:
+        expires_hours = int(expires_minutes / 60)
+        return f"in {expires_hours}h"
 
 
 @app.callback(invoke_without_command=True)
