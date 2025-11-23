@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/cesdperez/launchdarkly-audit/actions/workflows/docker-publish.yml)
 [![Version](https://img.shields.io/github/v/tag/cesdperez/launchdarkly-audit?label=version)](https://github.com/cesdperez/launchdarkly-audit/tags)
-[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/launchdarkly-audit/pkgs/container/ld-audit)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/cesdperez/launchdarkly-audit/pkgs/container/ldaudit)
 
 CLI to audit LaunchDarkly feature flags. Identifies inactive temporary flags and finds their references in your codebase.
 
@@ -18,7 +18,7 @@ CLI to audit LaunchDarkly feature flags. Identifies inactive temporary flags and
 ### Docker (Recommended)
 
 ```bash
-docker run --rm -e LD_API_KEY=your-key ghcr.io/cesdperez/ld-audit:latest \
+docker run --rm -e LD_API_KEY=your-key ghcr.io/cesdperez/ldaudit:latest \
   inactive --project=my-project
 ```
 
@@ -108,12 +108,12 @@ Use `--help` on any command to see all available options.
 ```bash
 # List flags
 docker run --rm -e LD_API_KEY=$LD_API_KEY \
-  ghcr.io/cesdperez/ld-audit:latest \
+  ghcr.io/cesdperez/ldaudit:latest \
   list --project=my-project
 
 # Find inactive flags (6+ months)
 docker run --rm -e LD_API_KEY=$LD_API_KEY \
-  ghcr.io/cesdperez/ld-audit:latest \
+  ghcr.io/cesdperez/ldaudit:latest \
   inactive --project=my-project --months=6
 ```
 

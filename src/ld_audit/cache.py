@@ -16,7 +16,7 @@ class SimpleCache:
             ttl_seconds: Time-to-live in seconds (default: 1 hour)
         """
         self.ttl_seconds = ttl_seconds
-        self.cache_dir = Path(user_cache_dir("launchdarkly-audit"))
+        self.cache_dir = Path(user_cache_dir("ldaudit"))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_cache_file(self, key):

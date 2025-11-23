@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ld-audit"
+name = "ldaudit"
 version = "0.1.0"
 description = "CLI tool to audit LaunchDarkly feature flags"
 readme = "README.md"

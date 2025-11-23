@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: cesdperez/ld-audit
+  IMAGE_NAME: cesdperez/ldaudit
 
 jobs:
   build-and-push:
