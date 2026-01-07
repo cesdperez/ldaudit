@@ -41,8 +41,8 @@ Homepage = "https://github.com/cesdperez/ldaudit"
 Repository = "https://github.com/cesdperez/ldaudit"
 Issues = "https://github.com/cesdperez/ldaudit/issues"
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-cov>=6.0.0",
     "pytest-mock>=3.14.0",
