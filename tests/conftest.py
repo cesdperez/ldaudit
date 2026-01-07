@@ -23,6 +23,7 @@ def sample_flag_data():
         maintainer_first_name="John",
         maintainer_last_name="Doe",
         creation_date=None,
+        code_references_count=0,
     ):
         if environments is None:
             environments = {
@@ -39,7 +40,7 @@ def sample_flag_data():
         if creation_date is None:
             creation_date = int((datetime.now() - timedelta(days=365)).timestamp() * 1000)
 
-        return {
+        flag_data = {
             "key": key,
             "name": name,
             "kind": kind,
@@ -52,6 +53,12 @@ def sample_flag_data():
                 "lastName": maintainer_last_name,
             },
         }
+
+        # Add code references data if count > 0
+        if code_references_count > 0:
+            flag_data["_codeReferences"] = {"total": code_references_count}
+
+        return flag_data
 
     return _make_flag
 
@@ -101,6 +108,33 @@ def active_flag(sample_flag_data):
             "production": {"on": True, "lastModified": one_week_ago},
             "staging": {"on": False, "lastModified": one_week_ago},
         },
+    )
+
+
+@pytest.fixture
+def ready_to_archive_flag(sample_flag_data):
+    """Fixture for a flag that meets all ready-to-archive criteria."""
+    # 60 days old, no code refs
+    old_creation_date = int((datetime.now() - timedelta(days=60)).timestamp() * 1000)
+    return sample_flag_data(
+        key="ready-to-archive-flag",
+        temporary=True,
+        archived=False,
+        creation_date=old_creation_date,
+        code_references_count=0,
+    )
+
+
+@pytest.fixture
+def not_ready_has_code_refs_flag(sample_flag_data):
+    """Fixture for a flag that is NOT ready to archive (has code references)."""
+    old_creation_date = int((datetime.now() - timedelta(days=60)).timestamp() * 1000)
+    return sample_flag_data(
+        key="has-code-refs-flag",
+        temporary=True,
+        archived=False,
+        creation_date=old_creation_date,
+        code_references_count=5,
     )
 
 

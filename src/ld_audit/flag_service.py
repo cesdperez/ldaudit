@@ -91,3 +91,68 @@ class FlagService:
             result = FlagService.filter_by_exclude_list(result, exclude_list)
 
         return result
+
+    @staticmethod
+    def get_ready_to_archive_flags(
+        flags: list[Flag],
+        min_age_days: int = 30,
+        eval_window_days: int = 7,
+        maintainers: list[str] | None = None,
+        exclude_list: list[str] | None = None,
+    ) -> list[Flag]:
+        """
+        Get flags that are ready to archive based on LaunchDarkly criteria.
+
+        A flag is ready to archive when:
+        - It is temporary (not permanent)
+        - It is not already archived
+        - It is older than min_age_days
+        - It has no code references
+        - It has not been requested in the past eval_window_days
+
+        Note: Flags must be enriched with status data first using enrich_flags_with_statuses().
+
+        Args:
+            flags: List of all flags (should be enriched with status data)
+            min_age_days: Minimum flag age in days (default: 30)
+            eval_window_days: Days without requests (default: 7)
+            maintainers: Optional list of maintainer names to filter by
+            exclude_list: Optional list of flag keys to exclude
+
+        Returns:
+            List of flags ready to archive
+        """
+        result = [flag for flag in flags if flag.is_ready_to_archive(min_age_days, eval_window_days)]
+
+        if maintainers:
+            result = FlagService.filter_by_maintainer(result, maintainers)
+
+        if exclude_list:
+            result = FlagService.filter_by_exclude_list(result, exclude_list)
+
+        return result
+
+    @staticmethod
+    def enrich_flags_with_statuses(flags: list[Flag], statuses: dict[str, dict]) -> None:
+        """
+        Enrich flags with lastRequested data from flag-statuses API.
+
+        This modifies the flags in place, setting the last_requested field.
+
+        Args:
+            flags: List of Flag objects to enrich
+            statuses: Dictionary mapping flag key to status data from get_flag_statuses()
+        """
+        for flag in flags:
+            status = statuses.get(flag.key, {})
+            last_requested_str = status.get("lastRequested")
+            if last_requested_str:
+                try:
+                    # Parse ISO format like "2016-08-16T21:10:11.886Z"
+                    last_requested = datetime.datetime.fromisoformat(last_requested_str.replace("Z", "+00:00"))
+                    # Convert to naive datetime for comparison
+                    flag.last_requested = last_requested.replace(tzinfo=None)
+                except (ValueError, AttributeError):
+                    flag.last_requested = None
+            else:
+                flag.last_requested = None

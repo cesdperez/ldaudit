@@ -41,7 +41,7 @@ class TestLaunchDarklyClient:
 
         cache = SimpleCache()
         cached_data = mock_api_response()
-        cache.set("test-project", cached_data)
+        cache.set("flags_test-project_response", cached_data)
 
         client = LaunchDarklyClient(api_key="test-api-key", base_url=DEFAULT_BASE_URL, cache=cache)
         result = client.get_all_flags("test-project")
@@ -67,7 +67,7 @@ class TestLaunchDarklyClient:
                 }
             ]
         }
-        cache.set("test-project", old_data)
+        cache.set("flags_test-project_response", old_data)
 
         client = LaunchDarklyClient(api_key="test-api-key", base_url=DEFAULT_BASE_URL, cache=cache)
 
@@ -102,7 +102,7 @@ class TestLaunchDarklyClient:
                 }
             ]
         }
-        cache.set("test-project", old_data)
+        cache.set("flags_test-project_response", old_data)
 
         client = LaunchDarklyClient(api_key="test-api-key", base_url=DEFAULT_BASE_URL, cache=cache)
 
@@ -117,7 +117,7 @@ class TestLaunchDarklyClient:
         result = client.get_all_flags("test-project", force_refresh=True)
 
         assert len(result) > 0
-        cached = cache.get("test-project")
+        cached = cache.get("flags_test-project_response")
         assert cached == new_data
         assert len(responses.calls) == 1
 
@@ -221,7 +221,9 @@ class TestLaunchDarklyClient:
 
         assert len(result) > 0
         assert len(responses.calls) == 1
-        assert responses.calls[0].request.url == f"{custom_url}/api/v2/flags/test-project"
+        assert (
+            responses.calls[0].request.url == f"{custom_url}/api/v2/flags/test-project?expand=codeReferences,evaluation"
+        )
 
     @responses.activate
     def test_get_all_flags_caches_api_response(self, temp_cache_dir, monkeypatch, mock_api_response):
@@ -241,7 +243,7 @@ class TestLaunchDarklyClient:
 
         client.get_all_flags("test-project")
 
-        cached_result = cache.get("test-project")
+        cached_result = cache.get("flags_test-project_response")
         assert cached_result == response_data
 
     @responses.activate
@@ -262,5 +264,5 @@ class TestLaunchDarklyClient:
 
         client.get_all_flags("test-project", enable_cache=False)
 
-        cached_result = cache.get("test-project")
+        cached_result = cache.get("flags_test-project_response")
         assert cached_result is None

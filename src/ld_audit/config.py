@@ -27,6 +27,11 @@ MILLISECONDS_TO_SECONDS = 1000.0
 MB_TO_BYTES = 1024 * 1024
 DAYS_PER_MONTH = 30
 
+# Ready-to-archive criteria (matching LaunchDarkly UI)
+DEFAULT_MIN_AGE_DAYS = 30  # Flag must be older than this
+DEFAULT_EVAL_WINDOW_DAYS = 7  # Flag must not have been evaluated in this window
+DEFAULT_ENVIRONMENT = "production"  # Default environment for flag status checks
+
 
 def get_api_key() -> str | None:
     """Get LaunchDarkly API key from environment."""

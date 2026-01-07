@@ -51,6 +51,9 @@ class Flag:
     creation_date: datetime.datetime
     maintainer: Maintainer
     environments: dict[str, Environment]
+    # Fields for "ready to archive" analysis
+    code_references_count: int = 0  # From expand=codeReferences in flags API
+    last_requested: datetime.datetime | None = None  # From flag-statuses API
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Flag":
@@ -64,6 +67,10 @@ class Flag:
         environments_data = data.get("environments", {})
         environments = {name: Environment.from_dict(name, env_data) for name, env_data in environments_data.items()}
 
+        # Parse code references count from expanded response
+        code_refs_data = data.get("_codeReferences", {})
+        code_references_count = code_refs_data.get("total", 0) if code_refs_data else 0
+
         return cls(
             key=data["key"],
             name=data.get("name", ""),
@@ -72,6 +79,8 @@ class Flag:
             creation_date=creation_date,
             maintainer=maintainer,
             environments=environments,
+            code_references_count=code_references_count,
+            # last_requested is set separately from flag-statuses API
         )
 
     @property
@@ -88,3 +97,44 @@ class Flag:
             return True
 
         return all(env.last_modified < threshold for env in self.environments.values())
+
+    def is_ready_to_archive(self, min_age_days: int = 30, eval_window_days: int = 7) -> bool:
+        """
+        Check if flag meets 'ready to archive' criteria.
+
+        A flag is ready to archive when:
+        - It is temporary (not permanent)
+        - It is not already archived
+        - It is older than min_age_days
+        - It has no code references
+        - It has not been requested in the past eval_window_days
+
+        Args:
+            min_age_days: Minimum age in days (default: 30)
+            eval_window_days: Evaluation window in days (default: 7)
+
+        Returns:
+            True if flag meets all criteria
+        """
+        # Must be temporary and not archived
+        if not self.temporary or self.archived:
+            return False
+
+        now = datetime.datetime.now()
+
+        # Must be older than min_age_days
+        age = now - self.creation_date
+        if age.days < min_age_days:
+            return False
+
+        # Must have no code references
+        if self.code_references_count > 0:
+            return False
+
+        # Must not have been requested recently
+        if self.last_requested is not None:
+            request_age = now - self.last_requested
+            if request_age.days < eval_window_days:
+                return False
+
+        return True

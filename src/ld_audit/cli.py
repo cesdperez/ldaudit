@@ -17,7 +17,15 @@ from rich.table import Table
 from ld_audit import VERSION
 from ld_audit.api_client import LaunchDarklyAPIError, LaunchDarklyClient
 from ld_audit.cache import SimpleCache
-from ld_audit.config import DEFAULT_BASE_URL, DEFAULT_CACHE_TTL, DEFAULT_MAX_FILE_SIZE_MB, get_api_key
+from ld_audit.config import (
+    DEFAULT_BASE_URL,
+    DEFAULT_CACHE_TTL,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_EVAL_WINDOW_DAYS,
+    DEFAULT_MAX_FILE_SIZE_MB,
+    DEFAULT_MIN_AGE_DAYS,
+    get_api_key,
+)
 from ld_audit.file_search import CodebaseScanner
 from ld_audit.flag_service import FlagService
 from ld_audit.formatters import (
@@ -263,6 +271,90 @@ def inactive(
         console.print(f"[bold]Total inactive flags:[/bold] {len(inactive_flags)}\n")
 
     handle_output(inactive_flags, project, base_url, output, format)
+
+
+@app.command(name="ready-to-archive")
+def ready_to_archive(
+    project: str = typer.Option("default", "--project", "-p", help="LaunchDarkly project name"),
+    environment: str = typer.Option(
+        DEFAULT_ENVIRONMENT, "--environment", "-e", help="Environment to check flag status (default: production)"
+    ),
+    min_age_days: int = typer.Option(DEFAULT_MIN_AGE_DAYS, "--min-age", help="Minimum flag age in days (default: 30)"),
+    eval_window_days: int = typer.Option(
+        DEFAULT_EVAL_WINDOW_DAYS, "--eval-window", help="Days without requests (default: 7)"
+    ),
+    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url", help="LaunchDarkly base URL"),
+    cache_ttl: int = typer.Option(DEFAULT_CACHE_TTL, "--cache-ttl", help="Cache TTL in seconds"),
+    maintainer: list[str] | None = typer.Option(
+        None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"
+    ),
+    exclude: list[str] | None = typer.Option(
+        None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"
+    ),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
+    override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="File path to write results to"),
+    format: OutputFormat | None = typer.Option(None, "--format", "-f", help="Output format (table, markdown, json)"),
+):
+    """
+    List feature flags that are ready to archive.
+
+    Flags are ready to archive when they meet ALL of these criteria:
+    - Temporary (not permanent)
+    - Older than 30 days (configurable with --min-age)
+    - Have no code references
+    - Have not been requested in the past 7 days (configurable with --eval-window)
+
+    Use --help for all options.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
+        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
+        raise typer.Exit(code=1)
+
+    cache = SimpleCache(ttl_seconds=cache_ttl)
+    client = LaunchDarklyClient(api_key=api_key, base_url=base_url, cache=cache)
+
+    maintainer_list = parse_comma_separated(maintainer)
+    exclude_list = parse_comma_separated(exclude)
+
+    try:
+        flags = client.get_all_flags(project, enable_cache=not no_cache, force_refresh=override_cache)
+        # Fetch flag statuses to get lastRequested timestamps
+        statuses = client.get_flag_statuses(
+            project, environment, enable_cache=not no_cache, force_refresh=override_cache
+        )
+    except LaunchDarklyAPIError as e:
+        handle_api_error(e)
+
+    # Enrich flags with lastRequested data from statuses
+    FlagService.enrich_flags_with_statuses(flags, statuses)
+
+    ready_flags = FlagService.get_ready_to_archive_flags(
+        flags, min_age_days, eval_window_days, maintainer_list, exclude_list
+    )
+
+    if not ready_flags:
+        console.print("[green]✓ No flags ready to archive![/green]")
+        console.print(
+            f"[dim]All flags are either permanent, recently created, have code references, "
+            f"or have been requested in the past {eval_window_days} days.[/dim]"
+        )
+        raise typer.Exit(code=0)
+
+    # Only print headers/stats to console if we are using table format OR exporting to a file
+    show_console_info = output is not None or format is None or format == OutputFormat.TABLE
+
+    if show_console_info:
+        console.print("\n[bold yellow]🗄️  Flags Ready to Archive[/bold yellow]")
+        console.print(
+            f"[dim]Flags that are temporary, older than {min_age_days} days, "
+            f"have no code references, and haven't been requested in {eval_window_days} days[/dim]\n"
+        )
+        console.print(f"[bold]Total flags ready to archive:[/bold] {len(ready_flags)}\n")
+
+    handle_output(ready_flags, project, base_url, output, format)
 
 
 @app.command()
