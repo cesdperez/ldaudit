@@ -8,7 +8,8 @@ import time
 
 import typer
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
 from rich.table import Table
 
 from ld_audit import VERSION
@@ -103,8 +104,24 @@ def list_flags(
         console.print(f"[yellow]No flags found in project '{project}'[/yellow]")
         raise typer.Exit(code=0)
 
+    # Calculate statistics (only for live flags as archived are not fetched)
+    total_live = len(filtered_flags)
+    permanent_flags = [f for f in filtered_flags if not f.temporary]
+    temporary_flags = [f for f in filtered_flags if f.temporary]
+
     console.print(f"\n[bold]Feature Flags for Project:[/bold] [cyan]{project}[/cyan]")
-    console.print(f"[dim]Total flags: {len(filtered_flags)}[/dim]\n")
+
+    stats_group = Group(
+        f"• [bold]Total flags live:[/bold] [green]{total_live}[/green]",
+        f"  • Permanent flags: {len(permanent_flags)}",
+        f"  • Temporary flags: {len(temporary_flags)}",
+    )
+
+    console.print()
+    console.print(
+        Panel(stats_group, border_style="cyan", padding=(1, 1), title="[bold]Summary[/bold]", title_align="left")
+    )
+    console.print()
 
     table = create_flags_table(filtered_flags, project, base_url)
     console.print(table)
