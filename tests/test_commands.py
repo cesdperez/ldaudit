@@ -361,6 +361,136 @@ class TestScanCommand:
 
 
 @pytest.mark.integration
+class TestAuditCommand:
+    def test_audit_command_generates_report(self, sample_flag_data, dicts_to_flags, monkeypatch):
+        """Test audit command generates a markdown report."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        flags = [
+            sample_flag_data(key="flag-1", temporary=True, maintainer_first_name="John"),
+            sample_flag_data(key="flag-2", temporary=False, maintainer_first_name="Jane"),
+        ]
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
+
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_flag_statuses") as mock_statuses:
+                mock_statuses.return_value = {}
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    output_file = os.path.join(tmpdir, "audit-report.md")
+                    result = runner.invoke(app, ["audit", "--project", "test-project", "--output", output_file])
+
+                    assert result.exit_code == 0
+                    assert "Audit report generated:" in result.stdout
+                    assert os.path.exists(output_file)
+
+                    content = Path(output_file).read_text()
+                    # Check main sections exist
+                    assert "# LaunchDarkly Feature Flags Audit" in content
+                    assert "## Summary" in content
+                    assert "## Flags by Maintainer" in content
+                    assert "## All Flags" in content
+                    assert "## Ready to Archive Flags" in content
+                    assert "## Inactive Flags" in content
+                    # Check command snippets
+                    assert "ldaudit list" in content
+                    assert "ldaudit ready-to-archive" in content
+                    assert "ldaudit inactive" in content
+
+    def test_audit_command_empty_sections(self, sample_flag_data, dicts_to_flags, monkeypatch):
+        """Test audit command shows 'no flags' message for empty sections."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        # Create flags that won't be ready-to-archive or inactive
+        one_week_ago = int(
+            (__import__("datetime").datetime.now() - __import__("datetime").timedelta(days=7)).timestamp() * 1000
+        )
+        flags = [
+            sample_flag_data(
+                key="recent-flag",
+                temporary=False,  # Permanent, won't be inactive or ready-to-archive
+                environments={
+                    "production": {"on": True, "lastModified": one_week_ago},
+                },
+            ),
+        ]
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
+
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_flag_statuses") as mock_statuses:
+                mock_statuses.return_value = {}
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    output_file = os.path.join(tmpdir, "audit-report.md")
+                    result = runner.invoke(app, ["audit", "--project", "test-project", "--output", output_file])
+
+                    assert result.exit_code == 0
+
+                    content = Path(output_file).read_text()
+                    # Should have "no flags" message for ready-to-archive and inactive
+                    assert "No flags in this category." in content
+
+    def test_audit_command_default_output_path(self, sample_flag_data, dicts_to_flags, monkeypatch):
+        """Test audit command uses default filename when no output specified."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        flags = [sample_flag_data(key="flag-1")]
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
+
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_flag_statuses") as mock_statuses:
+                mock_statuses.return_value = {}
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    # Change to temp directory to capture the default output file
+                    original_cwd = os.getcwd()
+                    os.chdir(tmpdir)
+                    try:
+                        result = runner.invoke(app, ["audit", "--project", "test-project"])
+
+                        assert result.exit_code == 0
+                        assert "Audit report generated:" in result.stdout
+                        # Should contain audit-YYYY-MM-DD.md pattern
+                        assert "audit-" in result.stdout
+                        assert ".md" in result.stdout
+                    finally:
+                        os.chdir(original_cwd)
+
+    def test_audit_command_with_maintainer_filter(self, sample_flag_data, dicts_to_flags, monkeypatch):
+        """Test audit command with maintainer filter."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        flags = [
+            sample_flag_data(key="john-flag", maintainer_first_name="John"),
+            sample_flag_data(key="jane-flag", maintainer_first_name="Jane"),
+        ]
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            mock_fetch.return_value = dicts_to_flags(flags)
+
+            with patch("ld_audit.api_client.LaunchDarklyClient.get_flag_statuses") as mock_statuses:
+                mock_statuses.return_value = {}
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    output_file = os.path.join(tmpdir, "audit-report.md")
+                    result = runner.invoke(
+                        app,
+                        ["audit", "--project", "test-project", "--maintainer", "John", "--output", output_file],
+                    )
+
+                    assert result.exit_code == 0
+
+                    content = Path(output_file).read_text()
+                    # John's flags should be in the report
+                    assert "john-flag" in content
+                    # Jane's flags should be filtered out from All Flags
+                    # (but might still appear in maintainer breakdown since that uses raw flags)
+
+
+@pytest.mark.integration
 class TestCacheCommand:
     def test_cache_list_command_empty(self, temp_cache_dir, monkeypatch):
         """Test cache list command with no cached projects."""

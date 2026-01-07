@@ -171,6 +171,204 @@ def to_json(headers: list[str], rows: list[list[str]]) -> str:
     return json.dumps(data, indent=2)
 
 
+def get_maintainer_breakdown(
+    all_flags: list[Flag],
+    ready_to_archive_flags: list[Flag],
+    inactive_flags: list[Flag],
+) -> list[dict[str, int | str]]:
+    """
+    Get flag counts grouped by maintainer, sorted by total descending.
+
+    Args:
+        all_flags: List of all flags
+        ready_to_archive_flags: List of ready to archive flags
+        inactive_flags: List of inactive flags
+
+    Returns:
+        List of dicts with maintainer name and counts
+    """
+    ready_keys = {f.key for f in ready_to_archive_flags}
+    inactive_keys = {f.key for f in inactive_flags}
+
+    maintainer_counts: dict[str, dict[str, int]] = {}
+
+    for flag in all_flags:
+        name = flag.maintainer.first_name
+        if name not in maintainer_counts:
+            maintainer_counts[name] = {"total": 0, "ready": 0, "inactive": 0}
+
+        maintainer_counts[name]["total"] += 1
+        if flag.key in ready_keys:
+            maintainer_counts[name]["ready"] += 1
+        if flag.key in inactive_keys:
+            maintainer_counts[name]["inactive"] += 1
+
+    # Sort by total descending
+    sorted_maintainers = sorted(maintainer_counts.items(), key=lambda x: x[1]["total"], reverse=True)
+
+    return [
+        {
+            "maintainer": name,
+            "total": counts["total"],
+            "ready_to_archive": counts["ready"],
+            "inactive": counts["inactive"],
+        }
+        for name, counts in sorted_maintainers
+    ]
+
+
+def _generate_flags_markdown_table(flags: list[Flag], project: str, base_url: str) -> str:
+    """Generate a markdown table for a list of flags."""
+    if not flags:
+        return ""
+
+    headers, rows = get_flags_data(flags, project, base_url)
+    return to_markdown(headers, rows)
+
+
+def generate_audit_report(
+    all_flags: list[Flag],
+    ready_to_archive_flags: list[Flag],
+    inactive_flags: list[Flag],
+    project: str,
+    base_url: str,
+    months: int,
+    min_age_days: int,
+    eval_window_days: int,
+    version: str,
+) -> str:
+    """
+    Generate a comprehensive audit report in markdown format.
+
+    Args:
+        all_flags: List of all active flags
+        ready_to_archive_flags: List of flags ready to archive
+        inactive_flags: List of inactive flags
+        project: LaunchDarkly project name
+        base_url: LaunchDarkly base URL
+        months: Inactivity threshold in months
+        min_age_days: Minimum age for ready-to-archive
+        eval_window_days: Evaluation window for ready-to-archive
+        version: Tool version string
+
+    Returns:
+        Complete markdown report string
+    """
+    import datetime
+
+    now = datetime.datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    timestamp_str = now.strftime("%Y-%m-%d at %H:%M UTC")
+
+    # Calculate statistics
+    total_live = len(all_flags)
+    permanent_count = len([f for f in all_flags if not f.temporary])
+    temporary_count = len([f for f in all_flags if f.temporary])
+    ready_count = len(ready_to_archive_flags)
+    inactive_count = len(inactive_flags)
+
+    # Build report sections
+    sections = []
+
+    # Header
+    sections.append(f"# LaunchDarkly Feature Flags Audit - {date_str}")
+    sections.append("")
+    sections.append(f"Report generated with [ldaudit](https://github.com/cesdperez/ldaudit) v{version}")
+    sections.append("")
+    sections.append("```sh")
+    sections.append("ldaudit audit")
+    sections.append("```")
+    sections.append("")
+
+    # Summary
+    sections.append("## Summary")
+    sections.append("")
+    sections.append("| Metric | Count |")
+    sections.append("|--------|-------|")
+    sections.append(f"| **Total live flags** | {total_live} |")
+    sections.append(f"| Permanent flags | {permanent_count} |")
+    sections.append(f"| Temporary flags | {temporary_count} |")
+    sections.append(f"| **Ready to archive** | {ready_count} |")
+    sections.append(f"| **Inactive ({months}+ months)** | {inactive_count} |")
+    sections.append("")
+    sections.append("---")
+    sections.append("")
+
+    # Flags by Maintainer
+    sections.append("## Flags by Maintainer")
+    sections.append("")
+    maintainer_breakdown = get_maintainer_breakdown(all_flags, ready_to_archive_flags, inactive_flags)
+    if maintainer_breakdown:
+        sections.append("| Maintainer | Total | Ready to Archive | Inactive |")
+        sections.append("|------------|-------|------------------|----------|")
+        for row in maintainer_breakdown:
+            sections.append(f"| {row['maintainer']} | {row['total']} | {row['ready_to_archive']} | {row['inactive']} |")
+    else:
+        sections.append("No flags found.")
+    sections.append("")
+    sections.append("---")
+    sections.append("")
+
+    # Ready to Archive Flags
+    sections.append("## Ready to Archive Flags")
+    sections.append("")
+    sections.append("- Temporary (not permanent)")
+    sections.append(f"- Older than {min_age_days} days")
+    sections.append(f"- Not requested in the past {eval_window_days} days")
+    sections.append("")
+    sections.append("```sh")
+    sections.append("ldaudit ready-to-archive")
+    sections.append("```")
+    sections.append("")
+    if ready_to_archive_flags:
+        sections.append(_generate_flags_markdown_table(ready_to_archive_flags, project, base_url))
+    else:
+        sections.append("No flags in this category.")
+    sections.append("")
+    sections.append("---")
+    sections.append("")
+
+    # Inactive Flags
+    sections.append("## Inactive Flags")
+    sections.append("")
+    sections.append("- Temporary (not permanent)")
+    sections.append(f"- Not modified in any environment for {months}+ months")
+    sections.append("")
+    sections.append("```sh")
+    sections.append("ldaudit inactive")
+    sections.append("```")
+    sections.append("")
+    if inactive_flags:
+        sections.append(_generate_flags_markdown_table(inactive_flags, project, base_url))
+    else:
+        sections.append("No flags in this category.")
+    sections.append("")
+    sections.append("---")
+    sections.append("")
+
+    # All Flags (at the end for less verbosity)
+    sections.append("## All Flags")
+    sections.append("")
+    sections.append("- All active (non-archived) feature flags")
+    sections.append("")
+    sections.append("```sh")
+    sections.append("ldaudit list")
+    sections.append("```")
+    sections.append("")
+    if all_flags:
+        sections.append(_generate_flags_markdown_table(all_flags, project, base_url))
+    else:
+        sections.append("No flags in this category.")
+    sections.append("")
+    sections.append("---")
+    sections.append("")
+
+    # Footer
+    sections.append(f"*Report generated on {timestamp_str}*")
+
+    return "\n".join(sections)
+
+
 def create_flags_table(flags: list[Flag], project: str, base_url: str) -> Table:
     """
     Create a Rich table for displaying flags with all environments shown inline.

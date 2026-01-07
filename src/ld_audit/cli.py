@@ -32,6 +32,7 @@ from ld_audit.formatters import (
     create_flags_table,
     format_date,
     format_env_status,
+    generate_audit_report,
     get_flags_data,
     to_json,
     to_markdown,
@@ -355,6 +356,95 @@ def ready_to_archive(
         console.print(f"[bold]Total flags ready to archive:[/bold] {len(ready_flags)}\n")
 
     handle_output(ready_flags, project, base_url, output, format)
+
+
+@app.command()
+def audit(
+    project: str = typer.Option("default", "--project", "-p", help="LaunchDarkly project name"),
+    environment: str = typer.Option(
+        DEFAULT_ENVIRONMENT, "--environment", "-e", help="Environment to check flag status (default: production)"
+    ),
+    months: int = typer.Option(3, "--months", "-m", help="Inactivity threshold in months"),
+    min_age_days: int = typer.Option(DEFAULT_MIN_AGE_DAYS, "--min-age", help="Minimum flag age in days (default: 30)"),
+    eval_window_days: int = typer.Option(
+        DEFAULT_EVAL_WINDOW_DAYS, "--eval-window", help="Days without requests (default: 7)"
+    ),
+    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url", help="LaunchDarkly base URL"),
+    cache_ttl: int = typer.Option(DEFAULT_CACHE_TTL, "--cache-ttl", help="Cache TTL in seconds"),
+    maintainer: list[str] | None = typer.Option(
+        None, "--maintainer", help="Filter by maintainer (comma-separated or repeated)"
+    ),
+    exclude: list[str] | None = typer.Option(
+        None, "--exclude", help="Exclude specific flag keys (comma-separated or repeated)"
+    ),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
+    override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="File path to write report to"),
+):
+    """
+    Generate a comprehensive audit report of all feature flags.
+
+    Combines the output of list, ready-to-archive, and inactive commands into a
+    single markdown report with summary statistics and maintainer breakdown.
+
+    Use --help for all options.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        console.print("[red]Error:[/red] LD_API_KEY not found in environment variables", style="bold")
+        console.print("Set it in your .env file or export it: export LD_API_KEY=your-key")
+        raise typer.Exit(code=1)
+
+    cache = SimpleCache(ttl_seconds=cache_ttl)
+    client = LaunchDarklyClient(api_key=api_key, base_url=base_url, cache=cache)
+
+    maintainer_list = parse_comma_separated(maintainer)
+    exclude_list = parse_comma_separated(exclude)
+
+    try:
+        flags = client.get_all_flags(project, enable_cache=not no_cache, force_refresh=override_cache)
+        # Fetch flag statuses for ready-to-archive analysis
+        statuses = client.get_flag_statuses(
+            project, environment, enable_cache=not no_cache, force_refresh=override_cache
+        )
+    except LaunchDarklyAPIError as e:
+        handle_api_error(e)
+
+    # Enrich flags with lastRequested data from statuses
+    FlagService.enrich_flags_with_statuses(flags, statuses)
+
+    # Apply common filters to get all flags
+    all_flags = FlagService.apply_common_filters(flags, maintainer_list, exclude_list)
+
+    # Get ready to archive flags
+    ready_to_archive_flags = FlagService.get_ready_to_archive_flags(
+        flags, min_age_days, eval_window_days, maintainer_list, exclude_list
+    )
+
+    # Get inactive flags
+    inactive_flags = FlagService.get_inactive_flags(flags, months, maintainer_list, exclude_list)
+
+    # Generate the audit report
+    report = generate_audit_report(
+        all_flags=all_flags,
+        ready_to_archive_flags=ready_to_archive_flags,
+        inactive_flags=inactive_flags,
+        project=project,
+        base_url=base_url,
+        months=months,
+        min_age_days=min_age_days,
+        eval_window_days=eval_window_days,
+        version=VERSION,
+    )
+
+    # Determine output file path
+    if output is None:
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        output = Path(f"audit-{date_str}.md")
+
+    # Write report to file
+    output.write_text(report)
+    console.print(f"[green]Audit report generated:[/green] {output}")
 
 
 @app.command()
