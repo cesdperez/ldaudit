@@ -27,6 +27,9 @@ class TestListCommand:
             assert result.exit_code == 0
             assert "Feature Flags for Project" in result.stdout
             assert "test-project" in result.stdout
+            assert "Total flags live:" in result.stdout
+            assert "Permanent flags:" in result.stdout
+            assert "Temporary flags:" in result.stdout
 
     def test_list_command_with_no_flags(self, monkeypatch):
         """Test list command with no flags found."""
