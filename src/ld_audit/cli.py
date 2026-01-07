@@ -5,6 +5,8 @@ import datetime
 import json
 import os
 import time
+from enum import Enum
+from pathlib import Path
 
 import typer
 from rich import box
@@ -18,7 +20,21 @@ from ld_audit.cache import SimpleCache
 from ld_audit.config import DEFAULT_BASE_URL, DEFAULT_CACHE_TTL, DEFAULT_MAX_FILE_SIZE_MB, get_api_key
 from ld_audit.file_search import CodebaseScanner
 from ld_audit.flag_service import FlagService
-from ld_audit.formatters import create_flags_table, format_date, format_env_status
+from ld_audit.formatters import (
+    create_flags_table,
+    format_date,
+    format_env_status,
+    get_flags_data,
+    to_json,
+    to_markdown,
+)
+
+
+class OutputFormat(str, Enum):
+    TABLE = "table"
+    MARKDOWN = "markdown"
+    JSON = "json"
+
 
 app = typer.Typer(help="LaunchDarkly feature flag audit tool")
 console = Console()
@@ -43,6 +59,66 @@ def parse_comma_separated(values: list[str] | None) -> list[str] | None:
         result.extend([v.strip() for v in value.split(",") if v.strip()])
 
     return result if result else None
+
+
+def handle_output(
+    flags: list,
+    project: str,
+    base_url: str,
+    output: Path | None = None,
+    format: OutputFormat | None = None,
+) -> None:
+    """
+    Handle data output based on format and output path.
+
+    Args:
+        flags: List of flag objects
+        project: Project name
+        base_url: LaunchDarkly base URL
+        output: Optional file path to write to
+        format: Optional output format
+    """
+    # Infer format from output extension if not explicitly provided
+    if output and format is None:
+        suffix = output.suffix.lower()
+        if suffix == ".json":
+            format = OutputFormat.JSON
+        elif suffix in (".md", ".markdown"):
+            format = OutputFormat.MARKDOWN
+        else:
+            format = OutputFormat.MARKDOWN  # Default export format
+
+    # Default to table if still None
+    if format is None:
+        format = OutputFormat.TABLE
+
+    if format == OutputFormat.TABLE:
+        table = create_flags_table(flags, project, base_url)
+        if output:
+            # We can't really "write" a rich table to a file easily in plain text
+            # without it look weird, so we convert to markdown for file output if table was requested
+            markdown_content = to_markdown(*get_flags_data(flags, project, base_url))
+            output.write_text(markdown_content)
+            console.print(f"[green]✓ Output saved to {output}[/green]")
+        else:
+            console.print(table)
+            console.print()
+        return
+
+    # For JSON and Markdown
+    headers, rows = get_flags_data(flags, project, base_url)
+
+    if format == OutputFormat.JSON:
+        content = to_json(headers, rows)
+    else:  # MARKDOWN
+        content = to_markdown(headers, rows)
+
+    if output:
+        output.write_text(content)
+        console.print(f"[green]✓ Output saved to {output}[/green]")
+    else:
+        # Print to console (without rich parsing if it's meant to be raw)
+        print(content)
 
 
 def handle_api_error(error: LaunchDarklyAPIError) -> None:
@@ -75,6 +151,8 @@ def list_flags(
     ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
     override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="File path to write results to"),
+    format: OutputFormat | None = typer.Option(None, "--format", "-f", help="Output format (table, markdown, json)"),
 ):
     """
     List all active feature flags for a project.
@@ -109,23 +187,25 @@ def list_flags(
     permanent_flags = [f for f in filtered_flags if not f.temporary]
     temporary_flags = [f for f in filtered_flags if f.temporary]
 
-    console.print(f"\n[bold]Feature Flags for Project:[/bold] [cyan]{project}[/cyan]")
+    # Only print headers/stats to console if we are using table format OR exporting to a file
+    show_console_info = output is not None or format is None or format == OutputFormat.TABLE
 
-    stats_group = Group(
-        f"• [bold]Total flags live:[/bold] [green]{total_live}[/green]",
-        f"  • Permanent flags: {len(permanent_flags)}",
-        f"  • Temporary flags: {len(temporary_flags)}",
-    )
+    if show_console_info:
+        console.print(f"\n[bold]Feature Flags for Project:[/bold] [cyan]{project}[/cyan]")
 
-    console.print()
-    console.print(
-        Panel(stats_group, border_style="cyan", padding=(1, 1), title="[bold]Summary[/bold]", title_align="left")
-    )
-    console.print()
+        stats_group = Group(
+            f"• [bold]Total flags live:[/bold] [green]{total_live}[/green]",
+            f"  • Permanent flags: {len(permanent_flags)}",
+            f"  • Temporary flags: {len(temporary_flags)}",
+        )
 
-    table = create_flags_table(filtered_flags, project, base_url)
-    console.print(table)
-    console.print()
+        console.print()
+        console.print(
+            Panel(stats_group, border_style="cyan", padding=(1, 1), title="[bold]Summary[/bold]", title_align="left")
+        )
+        console.print()
+
+    handle_output(filtered_flags, project, base_url, output, format)
 
 
 @app.command()
@@ -142,6 +222,8 @@ def inactive(
     ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this run"),
     override_cache: bool = typer.Option(False, "--override-cache", help="Force refresh and rewrite cache"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="File path to write results to"),
+    format: OutputFormat | None = typer.Option(None, "--format", "-f", help="Output format (table, markdown, json)"),
 ):
     """
     List inactive temporary flags not modified in any environment for X months.
@@ -172,13 +254,15 @@ def inactive(
         console.print(f"[dim]All temporary flags have been modified within the last {months} months.[/dim]")
         raise typer.Exit(code=0)
 
-    console.print("\n[bold yellow]⚠️  Inactive Feature Flags[/bold yellow]")
-    console.print(f"[dim]Flags not modified in any environment for {months}+ months[/dim]\n")
-    console.print(f"[bold]Total inactive flags:[/bold] {len(inactive_flags)}\n")
+    # Only print headers/stats to console if we are using table format OR exporting to a file
+    show_console_info = output is not None or format is None or format == OutputFormat.TABLE
 
-    table = create_flags_table(inactive_flags, project, base_url)
-    console.print(table)
-    console.print()
+    if show_console_info:
+        console.print("\n[bold yellow]⚠️  Inactive Feature Flags[/bold yellow]")
+        console.print(f"[dim]Flags not modified in any environment for {months}+ months[/dim]\n")
+        console.print(f"[bold]Total inactive flags:[/bold] {len(inactive_flags)}\n")
+
+    handle_output(inactive_flags, project, base_url, output, format)
 
 
 @app.command()

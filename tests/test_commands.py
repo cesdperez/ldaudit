@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -106,6 +107,44 @@ class TestListCommand:
             mock_fetch.assert_called_once()
             call_kwargs = mock_fetch.call_args.kwargs
             assert call_kwargs["force_refresh"] is True
+
+    def test_list_command_json_format(self, mock_api_response, dicts_to_flags, monkeypatch):
+        """Test list command with JSON format."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            api_response = mock_api_response()
+            mock_fetch.return_value = dicts_to_flags(api_response["items"])
+
+            result = runner.invoke(app, ["list", "--project", "test-project", "--format", "json"])
+
+            assert result.exit_code == 0
+            # Result should be a valid JSON list
+            import json
+
+            data = json.loads(result.stdout)
+            assert isinstance(data, list)
+            assert data[0]["key"] == api_response["items"][0]["key"]
+
+    def test_list_command_markdown_export(self, mock_api_response, dicts_to_flags, monkeypatch):
+        """Test list command with markdown export to file."""
+        monkeypatch.setenv("LD_API_KEY", "test-api-key")
+
+        with patch("ld_audit.api_client.LaunchDarklyClient.get_all_flags") as mock_fetch:
+            api_response = mock_api_response()
+            mock_fetch.return_value = dicts_to_flags(api_response["items"])
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_file = os.path.join(tmpdir, "results.md")
+                result = runner.invoke(app, ["list", "--project", "test-project", "--output", output_file])
+
+                assert result.exit_code == 0
+                assert "Output saved to" in result.stdout
+                assert os.path.exists(output_file)
+
+                content = Path(output_file).read_text()
+                assert "| Flag Key |" in content
+                assert f"| [{api_response['items'][0]['key']}]" in content
 
 
 @pytest.mark.integration
